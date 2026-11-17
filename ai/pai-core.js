@@ -6,7 +6,7 @@
 (function (G) {
 'use strict';
 const VER = '1';
-const SIZES = { seg: 4.7e6, depth: 28.6e6 };
+const SIZES = { seg: 4.7e6, depth: 28.6e6, cut: 2.35e6 };
 const GROUPS = {            // ADE20K class numbers (0 = other)
   sky: [[3, 1]],
   water: [[22, 1], [27, 1], [129, 1], [110, 1], [61, 1]],
@@ -19,7 +19,7 @@ const GROUPS = {            // ADE20K class numbers (0 = other)
 };
 const NAMES = 'other,wall,building,sky,floor,tree,ceiling,road,bed,windowpane,grass,cabinet,sidewalk,person,earth,door,table,mountain,plant,curtain,chair,car,water,painting,sofa,shelf,house,sea,mirror,rug,field,armchair,seat,fence,desk,rock,wardrobe,lamp,bathtub,railing,cushion,base,box,column,signboard,chest of drawers,counter,sand,sink,skyscraper,fireplace,refrigerator,grandstand,path,stairs,runway,case,pool table,pillow,screen door,stairway,river,bridge,bookcase,blind,coffee table,toilet,flower,book,hill,bench,countertop,stove,palm,kitchen island,computer,swivel chair,boat,bar,arcade machine,hovel,bus,towel,light,truck,tower,chandelier,awning,streetlight,booth,television,airplane,dirt track,apparel,pole,land,bannister,escalator,ottoman,bottle,buffet,poster,stage,van,ship,fountain,conveyer belt,canopy,washer,plaything,swimming pool,stool,barrel,basket,waterfall,tent,bag,minibike,cradle,oven,ball,food,step,tank,trade name,microwave,pot,animal,bicycle,lake,dishwasher,screen,blanket,sculpture,hood,sconce,vase,traffic light,tray,ashcan,fan,pier,crt screen,plate,monitor,bulletin board,shower,radiator,glass,clock,flag'.split(',');
 
-let sessions = {}, ready = null;
+let sessions = {};
 const now = () => (G.performance ? performance.now() : Date.now());
 
 async function fetchCached(url, onp) {
@@ -43,24 +43,28 @@ async function fetchCached(url, onp) {
   return buf;
 }
 
-function init(base, onp) {
-  if (ready) return ready;
-  ready = (async () => {
-    ort.env.wasm.wasmPaths = base; ort.env.wasm.numThreads = 1; ort.env.logLevel = 'error';
-    const tot = SIZES.seg + SIZES.depth, got = { seg: 0, depth: 0 };
-    const rep = stage => onp && onp({ stage, frac: Math.min(1, (got.seg + got.depth) / tot) });
-    const sb = await fetchCached(base + 'seg.onnx', n => { got.seg = Math.min(n, SIZES.seg); rep('download'); }); got.seg = SIZES.seg; rep('download');
-    const db = await fetchCached(base + 'depth.onnx', n => { got.depth = Math.min(n, SIZES.depth); rep('download'); }); got.depth = SIZES.depth; rep('download');
+/* models load on first use and stay cached on the phone */
+const loading = {};
+function ensure(base, names, onp) {
+  ort.env.wasm.wasmPaths = base; ort.env.wasm.numThreads = 1; ort.env.logLevel = 'error';
+  const need = names.filter(n => !sessions[n]);
+  if (!need.length) return Promise.resolve();
+  const key = need.join('+');
+  if (loading[key]) return loading[key];
+  const p = loading[key] = (async () => {
+    const tot = need.reduce((a, n) => a + SIZES[n], 0), got = {};
+    const rep = () => onp && onp({ stage: 'download', frac: Math.min(1, need.reduce((a, n) => a + (got[n] || 0), 0) / tot) });
+    const bufs = {};
+    for (const n of need) { bufs[n] = await fetchCached(base + n + '.onnx', b => { got[n] = Math.min(b, SIZES[n]); rep(); }); got[n] = SIZES[n]; rep(); }
     onp && onp({ stage: 'load', frac: 0 });
     const opt = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' };
-    sessions.seg = await ort.InferenceSession.create(sb, opt);
-    onp && onp({ stage: 'load', frac: 0.3 });
-    sessions.depth = await ort.InferenceSession.create(db, opt);
+    for (const n of need) if (!sessions[n]) sessions[n] = await ort.InferenceSession.create(bufs[n], opt);
     onp && onp({ stage: 'load', frac: 1 });
   })();
-  ready.catch(() => { ready = null; });
-  return ready;
+  p.then(() => { delete loading[key]; }, () => { delete loading[key]; });
+  return p;
 }
+function init(base, onp) { return ensure(base, ['seg', 'depth'], onp); }
 
 /* ---------- small image helpers (single channel Float32 unless said) ---------- */
 function resizeF(src, sw, sh, dw, dh) {
@@ -287,5 +291,57 @@ async function analyze(rgba, w, h, onp, opt) {
   return { v: 1, w: mw, h: mh, depth: depthTex, fill: fillTex, m1, m2, elements, aliveC, animals, top: sg.top.slice(0, 8), depthStd: +dv.toFixed(3), depthMean: +dm.toFixed(3), holes: +(holeN / N).toFixed(3), depthSize: L, ms: { seg: Math.round(T.seg), depth: Math.round(T.depth), build: Math.round(T.build), total: Math.round(T.total) } };
 }
 
-G.PAICore = { init, analyze, VER };
+/* ---------- 3D scan: cut the product out and measure its depth ---------- */
+async function runCut(rgba, w, h) {
+  const S = 320, pl = rgbPlanes(rgba, w, h, S, S), n = S * S, inp = new Float32Array(3 * n), mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225];
+  for (let c = 0; c < 3; c++) { const p = pl[c], o = c * n; for (let i = 0; i < n; i++) inp[o + i] = (p[i] - mean[c]) / std[c]; }
+  const s = sessions.cut, out = await s.run({ [s.inputNames[0]]: new ort.Tensor('float32', inp, [1, 3, S, S]) });
+  const d = out[s.outputNames[0]].data; let mn = Infinity, mx = -Infinity; for (let i = 0; i < n; i++) { if (d[i] < mn) mn = d[i]; if (d[i] > mx) mx = d[i]; }
+  const o = new Float32Array(n), k = 1 / ((mx - mn) || 1); for (let i = 0; i < n; i++) o[i] = (d[i] - mn) * k;
+  return o;
+}
+async function object3d(rgba, w, h, onp) {
+  const P = (stage, frac) => onp && onp({ stage, frac }), t0 = now();
+  const ms = Math.min(1, 512 / Math.max(w, h)), mw = Math.max(16, Math.round(w * ms)), mh = Math.max(16, Math.round(h * ms)), N = mw * mh;
+  P('cut', 0);
+  const cut = await runCut(rgba, w, h);
+  P('depth', 0);
+  const dp = await runDepth(rgba, w, h, 518);
+  P('build', 0);
+  const col = rgbPlanes(rgba, w, h, mw, mh), lum = new Float32Array(N);
+  for (let i = 0; i < N; i++) lum[i] = 0.299 * col[0][i] + 0.587 * col[1][i] + 0.114 * col[2][i];
+  const gd = makeGuide(lum, mw, mh, Math.max(3, Math.round(Math.max(mw, mh) / 80)));
+  let m = guided(gd, resizeF(cut, 320, 320, mw, mh), 0.002);
+  for (let i = 0; i < N; i++) m[i] = sstep(0.3, 0.7, m[i]);
+  // keep only the biggest connected piece (the product), drop specks
+  const lab = new Int32Array(N).fill(-1), q = new Int32Array(N); let best = -1, bestN = 0, nl = 0;
+  for (let i = 0; i < N; i++) if (m[i] > 0.5 && lab[i] < 0) {
+    let qh = 0, qt = 0; q[qt++] = i; lab[i] = nl;
+    while (qh < qt) { const j = q[qh++], x = j % mw, y = (j / mw) | 0;
+      for (const k of [x > 0 ? j - 1 : -1, x < mw - 1 ? j + 1 : -1, y > 0 ? j - mw : -1, y < mh - 1 ? j + mw : -1]) if (k >= 0 && lab[k] < 0 && m[k] > 0.5) { lab[k] = nl; q[qt++] = k; } }
+    if (qt > bestN) { bestN = qt; best = nl; } nl++;
+  }
+  if (bestN < N * 0.02) throw new Error('No product found in this photo. Put the product on a plain background, fill most of the photo with it, and try again.');
+  // fill small holes inside the product
+  const out = new Uint8Array(N); const bg = new Uint8Array(N); { let qh = 0, qt = 0;
+    for (let x = 0; x < mw; x++) for (const y of [0, mh - 1]) { const i = y * mw + x; if (lab[i] !== best && !bg[i]) { bg[i] = 1; q[qt++] = i; } }
+    for (let y = 0; y < mh; y++) for (const x of [0, mw - 1]) { const i = y * mw + x; if (lab[i] !== best && !bg[i]) { bg[i] = 1; q[qt++] = i; } }
+    while (qh < qt) { const j = q[qh++], x = j % mw, y = (j / mw) | 0;
+      for (const k of [x > 0 ? j - 1 : -1, x < mw - 1 ? j + 1 : -1, y > 0 ? j - mw : -1, y < mh - 1 ? j + mw : -1]) if (k >= 0 && !bg[k] && lab[k] !== best) { bg[k] = 1; q[qt++] = k; } } }
+  let x0 = mw, y0 = mh, x1 = 0, y1 = 0;
+  for (let i = 0; i < N; i++) { const inside = !bg[i]; const v = inside ? (lab[i] === best ? m[i] : 1) : (m[i] * 0); out[i] = Math.round(Math.max(0, Math.min(1, inside ? Math.max(v, .51) : 0)) * 255);
+    if (inside) { const x = i % mw, y = (i / mw) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } }
+  // soft edge from the guided mask, only on the outline
+  for (let i = 0; i < N; i++) if (out[i] && lab[i] === best) out[i] = Math.round(Math.max(0.5, m[i]) * 255);
+  // depth inside the product, stretched to 0..1
+  const d0 = resizeF(dp.d, dp.w, dp.h, mw, mh); let dl = 1, dh = 0; const vals = [];
+  for (let i = 0; i < N; i += 2) if (out[i] > 127) vals.push(d0[i]);
+  vals.sort((a, b) => a - b); if (vals.length) { dl = vals[Math.floor(vals.length * .03)]; dh = vals[Math.floor(vals.length * .97)]; }
+  const dep = new Uint8Array(N), kk = 1 / ((dh - dl) || 1); for (let i = 0; i < N; i++) { const v = (d0[i] - dl) * kk; dep[i] = Math.round(Math.max(0, Math.min(1, v)) * 255); }
+  const rgbaS = new Uint8Array(N * 4); for (let i = 0, j = 0; i < N; i++, j += 4) { rgbaS[j] = Math.round(col[0][i] * 255); rgbaS[j + 1] = Math.round(col[1][i] * 255); rgbaS[j + 2] = Math.round(col[2][i] * 255); rgbaS[j + 3] = out[i]; }
+  P('build', 1);
+  return { v: 1, w: mw, h: mh, rgba: rgbaS, depth: dep, box: [x0, y0, x1, y1], frac: +(bestN / N).toFixed(3), ms: Math.round(now() - t0) };
+}
+
+G.PAICore = { init, ensure, analyze, object3d, VER };
 })(typeof self !== 'undefined' ? self : window);

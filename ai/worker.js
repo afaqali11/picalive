@@ -10,6 +10,10 @@ self.onmessage = async e => {
       await PAICore.init(base, prog);
       const r = await PAICore.analyze(new Uint8Array(m.rgba), m.w, m.h, prog, m.opt);
       self.postMessage({ id, ok: true, result: r }, [r.depth.buffer, r.fill.buffer, r.m1.buffer, r.m2.buffer]);
+    } else if (m.cmd === 'object3d') {
+      await PAICore.ensure(base, ['cut', 'depth'], prog);
+      const r = await PAICore.object3d(new Uint8Array(m.rgba), m.w, m.h, prog);
+      self.postMessage({ id, ok: true, result: r }, [r.rgba.buffer, r.depth.buffer]);
     } else self.postMessage({ id, error: 'unknown command' });
   } catch (err) { self.postMessage({ id, error: String((err && err.message) || err) }); }
 };
