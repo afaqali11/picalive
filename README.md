@@ -7,7 +7,7 @@ Turn real products into 3D models you can spin all the way round and place in yo
 ## How to use it
 1. Open the link above on your phone in Safari (iPhone) or Chrome (Android).
 2. Tap **New 360° scan** and walk slowly around the product. The app takes sharp photos by itself and shows a ring that fills as you go round.
-3. Check the four main views (front, left, back, right) and tap **Build 3D model**. The photos go to the 3D service you set up in **3D service** (fal.ai: Hunyuan3D 3 or Tripo). Your key is kept only on your phone.
+3. Check the four main views (front, left, back, right) and tap **Build 3D model**. The photos go to free open-source 3D AI on Hugging Face: Hunyuan3D 2 multi-view (Tencent) first, TRELLIS (Microsoft) if that one is busy. No payment. Free GPU time has a daily limit; a free Hugging Face token (in **3D AI**) raises it and stays only on your phone.
 4. Turn the model with your finger, tap **View in my room** to place it at real size, or save it as GLB or USDZ (iPhone).
 
 **Quick draft from 1 photo** builds a rough model on your phone for free. The back is guessed, so use a 360° scan for a real model.

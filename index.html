@@ -248,12 +248,12 @@ input[type=range]{width:100%;accent-color:var(--accent);height:32px}
     <div id="scansSec" hidden><div class="sec-head"><h2>My 3D models</h2><span class="count" id="scanCount"></span></div><div id="scanList" class="grid"></div></div>
     <div class="steps" id="howto">
       <div class="step"><i>1</i><span><b>Walk around the product</b>Put it on a table with space around it. The app shows a ring and takes sharp photos by itself as you walk around.</span></div>
-      <div class="step"><i>2</i><span><b>Build the 3D model</b>The photos go to a 3D service that builds a detailed, textured model in a few minutes.</span></div>
+      <div class="step"><i>2</i><span><b>Build the 3D model</b>Free open-source 3D AI (Hunyuan3D and TRELLIS) builds a detailed, textured model from your photos in a few minutes.</span></div>
       <div class="step"><i>3</i><span><b>Turn it, place it, share it</b>Spin it all the way round, see it at real size on your table, and save it as a 3D file.</span></div>
     </div>
   </div>
   <div class="dock"><div class="row">
-    <button class="btn" id="stSettings">3D service</button>
+    <button class="btn" id="stSettings">3D AI</button>
     <button class="btn primary" id="dock360">New 360&deg; scan</button>
     <span hidden><button id="addBtn"></button><button id="dockScan"></button></span>
   </div></div>
@@ -10368,62 +10368,94 @@ function glbFromGeometry(sc, thick) {
 const jpegOf = (src, max, q = 0.9) => { const c = scaleCanvas(src, 0, 0, src.videoWidth || src.width, src.videoHeight || src.height, max); return c.toDataURL('image/jpeg', q); };
 
 /* ───────────── 3D service (the server that builds the model) ───────────── */
-/* Pluggable: each entry knows its fal.ai endpoint, how to send the four views and where the GLB is in the answer.
-   The user's own key is kept only on this phone. */
+/* Free open-source 3D AI on Hugging Face. An optional free token is kept only on this phone. */
 const Svc = {
+  /* Free 3D AI models hosted on Hugging Face (open source, free GPU time). Called with the plain Gradio web API. */
   list: {
-    hunyuan: { name: 'Hunyuan3D 3 (by Tencent)', price: 'about $0.68 per model', model: 'fal-ai/hunyuan3d-v3/image-to-3d',
-      input: v => ({ input_image_url: v.front, back_image_url: v.back, left_image_url: v.left, right_image_url: v.right, enable_pbr: true }) },
-    tripo: { name: 'Tripo 3.1', price: 'about $0.50 to $0.70 per model', model: 'tripo3d/h3.1/multiview-to-3d',
-      input: v => ({ image_urls: [v.front, v.left, v.back, v.right], texture: true, pbr: true, texture_quality: 'detailed', geometry_quality: 'detailed' }) }
+    hunyuan: { name: 'Hunyuan3D 2 multi-view (Tencent, open source)', host: 'https://tencent-hunyuan3d-2mv.hf.space', api: 'generation_all',
+      note: 'uses your front, left, back and right photos',
+      data: (f, opt) => [null, null, f.front, f.back, f.left, f.right, 30, 5.0, 1234, 256, true, 8000, true] },
+    trellis: { name: 'TRELLIS (Microsoft, open source)', host: 'https://trellis-community-trellis.hf.space', api: 'generate_and_extract_glb',
+      note: 'uses your best front photo',
+      cutout: true, data: (f) => [f.front, [], 0, 7.5, 12, 3.0, 12, 'stochastic', 0.95, 1024] }
   },
-  base: 'https://queue.fal.run/',
+  order: ['hunyuan', 'trellis'],
   get() { try { return JSON.parse(LS.get('pa.svc') || '{}'); } catch (e) { return {}; } },
   set(o) { LS.set('pa.svc', JSON.stringify(o)); },
-  pick() { const c = Svc.get(); return Svc.list[c.p] ? c.p : 'hunyuan'; },
-  ready() { return !!Svc.get().key; },
+  pick() { const c = Svc.get(); return Svc.list[c.p] ? c.p : 'auto'; },
+  ready() { return true; },
+  label() { const p = Svc.pick(); return p === 'auto' ? 'free open-source 3D AI' : Svc.list[p].name; },
   async settings() {
-    const c = Svc.get(), sel = el('select', { id: 'svcSel', style: 'width:100%;margin-bottom:12px' }, ...Object.entries(Svc.list).map(([k, v]) => el('option', { value: k, selected: k === Svc.pick() }, v.name + ' · ' + v.price)));
-    const key = el('input', { type: 'password', id: 'svcKey', placeholder: 'Paste your fal.ai API key', value: c.key || '', autocomplete: 'off', style: 'width:100%' });
-    const v = await dialog({ title: '3D service', node: el('div', { style: 'margin-bottom:14px' },
-      el('p', { style: 'margin:0 0 10px;color:var(--muted);font-size:.92rem' }, 'Realistic models are built on a 3D AI server from four of your photos. You pay that service directly, per model. Get a key at fal.ai (Dashboard, Keys) and add a few dollars of credit.'),
-      sel, key, el('p', { style: 'margin:10px 0 0;color:var(--muted);font-size:.8rem' }, 'Your key is kept only on this phone and is sent only to fal.ai.')),
+    const c = Svc.get(), cur = Svc.pick();
+    const opts = [['auto', 'Best free model (tries Hunyuan3D, then TRELLIS)'], ...Object.entries(Svc.list).map(([k, v]) => [k, v.name])];
+    const sel = el('select', { id: 'svcSel', style: 'width:100%;margin-bottom:12px' }, ...opts.map(([k, n]) => el('option', { value: k, selected: k === cur }, n)));
+    const key = el('input', { type: 'password', id: 'svcKey', placeholder: 'Optional: free Hugging Face token (hf_...)', value: c.key || '', autocomplete: 'off', style: 'width:100%' });
+    const v = await dialog({ title: '3D AI', node: el('div', { style: 'margin-bottom:14px' },
+      el('p', { style: 'margin:0 0 10px;color:var(--muted);font-size:.92rem' }, 'Models are built for free by open-source 3D AI running on Hugging Face. No payment, no account needed.'),
+      sel, key, el('p', { style: 'margin:10px 0 0;color:var(--muted);font-size:.8rem' }, 'Free GPU time has a daily limit. If you hit it, make a free account at huggingface.co, create a token (Settings, Access Tokens, type Read) and paste it here. It is kept only on this phone.')),
       actions: [{ label: 'Cancel', value: false }, { label: 'Save', kind: 'primary', value: true }] });
     if (!v) return false;
-    Svc.set({ p: sel.value, key: key.value.trim() }); toast(key.value.trim() ? '3D service saved' : 'Key removed'); return !!key.value.trim();
+    Svc.set({ p: sel.value, key: key.value.trim() }); toast('Saved'); return true;
   },
-  async req(url, opt) {
-    const c = Svc.get(), r = await fetch(url, { ...opt, headers: { Authorization: 'Key ' + c.key, 'Content-Type': 'application/json', ...(opt && opt.headers) } });
-    let j = null; try { j = await r.json(); } catch (e) {}
-    if (!r.ok) { const d = j && (j.detail || j.message || j.error); const msg = typeof d === 'string' ? d : d ? JSON.stringify(d).slice(0, 200) : 'HTTP ' + r.status;
-      throw new Error(r.status === 401 || r.status === 403 ? 'The 3D service did not accept your key (' + msg + ').' : r.status === 402 ? 'Your 3D service account is out of credit.' : 'The 3D service said: ' + msg); }
-    return j;
+  hdr() { const k = Svc.get().key; return k ? { Authorization: 'Bearer ' + k } : {}; },
+  async prefix(host) {
+    try { const r = await fetch(host + '/config', { headers: Svc.hdr() }); if (r.ok) { const j = await r.json(); return j.api_prefix || ''; } } catch (e) {}
+    return '/gradio_api';
   },
-  async submit(views) {
-    const p = Svc.pick(), P = Svc.list[p];
-    const j = await Svc.req(Svc.base + P.model, { method: 'POST', body: JSON.stringify(P.input(views)) });
-    if (!j || !j.status_url || !j.response_url) throw new Error('The 3D service gave an unexpected answer.');
-    return { p, status_url: j.status_url, response_url: j.response_url, request_id: j.request_id, t0: Date.now() };
+  async upload(base, blob, name) {
+    const fd = new FormData(); fd.append('files', blob, name);
+    const r = await fetch(base + '/upload', { method: 'POST', body: fd, headers: Svc.hdr() });
+    if (!r.ok) throw new Error(r.status === 404 ? 'busy' : 'Upload failed (' + r.status + ').');
+    const j = await r.json(); return { path: j[0], orig_name: name, meta: { _type: 'gradio.FileData' } };
   },
-  /* wait for the model; resumes after the app was closed, because the job links are saved with the scan */
-  async wait(job, onp) {
-    for (let i = 0; ; i++) {
-      const s = await Svc.req(job.status_url + (job.status_url.includes('?') ? '&' : '?') + 'logs=1');
-      if (onp) onp(s);
-      if (s.status === 'COMPLETED') break;
-      if (s.status && /FAIL|ERROR|CANCEL/.test(s.status)) throw new Error('The 3D service could not build this model.');
-      if (Date.now() - job.t0 > 30 * 60000) throw new Error('The 3D service is taking too long. Try again later.');
-      await sleep(i < 10 ? 2500 : 5000);
+  /* front photo cut out on the phone and framed the way TRELLIS expects (518 px, black background) */
+  async cutout(src) {
+    const img = await loadImage(src), s = await AI.object3d(img), [x0, y0, x1, y1] = s.box;
+    const m = el('canvas'); m.width = s.w; m.height = s.h; m.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(s.rgba.buffer || s.rgba), s.w, s.h), 0, 0);
+    const side = Math.max(x1 - x0, y1 - y0) * 1.2, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, c = el('canvas'); c.width = c.height = 518;
+    const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, 518, 518); x.drawImage(m, cx - side / 2, cy - side / 2, side, side, 0, 0, 518, 518);
+    return new Promise(r => c.toBlob(r, 'image/png'));
+  },
+  async run(id, views, onp) {
+    const P = Svc.list[id], base = P.host + await Svc.prefix(P.host), f = {};
+    onp('Sending your photos to ' + P.name.split(' (')[0]);
+    if (P.cutout) f.front = await Svc.upload(base, await Svc.cutout(views.front), 'front.png');
+    else for (const k of ['front', 'left', 'back', 'right']) if (views[k]) f[k] = await Svc.upload(base, await (await fetch(views[k])).blob(), k + '.jpg');
+    const r = await fetch(base + '/call/' + P.api, { method: 'POST', headers: { 'Content-Type': 'application/json', ...Svc.hdr() }, body: JSON.stringify({ data: P.data(f) }) });
+    if (!r.ok) throw new Error('The 3D AI did not take the job (' + r.status + ').');
+    const ev = (await r.json()).event_id; onp('Building your 3D model with ' + P.name.split(' (')[0]);
+    const res = await fetch(base + '/call/' + P.api + '/' + ev, { headers: Svc.hdr() }), rd = res.body.getReader(), dec = new TextDecoder();
+    let buf = '', out = null, err = null, t0 = Date.now();
+    for (;;) {
+      const { value, done } = await rd.read(); if (done) break; buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+        const blk = buf.slice(0, i); buf = buf.slice(i + 2);
+        const evn = (blk.match(/^event: *(.*)$/m) || [])[1], dat = (blk.match(/^data: *([\s\S]*)$/m) || [])[1];
+        if (evn === 'complete') { try { out = JSON.parse(dat); } catch (e) {} }
+        else if (evn === 'error') { let d = dat; try { d = JSON.parse(dat); } catch (e) {} err = (d && (d.message || d.error)) || (typeof d === 'string' && d !== 'null' ? d : 'The 3D AI could not build this model.'); }
+        else onp(null, Math.round((Date.now() - t0) / 1000));
+      }
+      if (out || err) { try { rd.cancel(); } catch (e) {} break; }
     }
-    const res = await Svc.req(job.response_url);
-    const url = Svc.findGlb(res); if (!url) throw new Error('The 3D service finished but sent no 3D file.' + (res && res.detail ? ' ' + JSON.stringify(res.detail).slice(0, 160) : ''));
-    const r = await fetch(url); if (!r.ok) throw new Error('Could not download the 3D file (' + r.status + ').');
-    return r.arrayBuffer();
+    if (err) throw new Error(/quota|GPU|exceeded/i.test(err) ? 'quota: ' + err : err);
+    const url = Svc.findGlb(out, P.host); if (!url) throw new Error('The 3D AI finished but sent no 3D file.');
+    const g = await fetch(url, { headers: Svc.hdr() }); if (!g.ok) throw new Error('Could not download the 3D file (' + g.status + ').');
+    return g.arrayBuffer();
   },
-  findGlb(o) {
-    const pref = [o && o.model_glb, o && o.model_mesh, o && o.model_urls && o.model_urls.glb, o && o.model_urls && o.model_urls.pbr_model];
-    for (const f of pref) { const u = f && (f.url || (typeof f === 'string' ? f : null)); if (u) return u; }
-    let hit = null; const walk = x => { if (hit || !x) return; if (typeof x === 'string') { if (/^https?:.*\.glb(\?|$)/i.test(x)) hit = x; return; } if (typeof x === 'object') for (const k in x) walk(x[k]); }; walk(o); return hit;
+  async build(views, onp) {
+    const p = Svc.pick(), ids = p === 'auto' ? Svc.order : [p]; let last = null;
+    for (const id of ids) {
+      try { return await Svc.run(id, views, onp); }
+      catch (e) { last = e; console.warn('3D AI', id, e); if (ids.length > 1) onp(Svc.list[id].name.split(' (')[0] + ' is busy, trying the next free model'); }
+    }
+    const m = (last && last.message) || String(last);
+    if (/^quota/.test(m)) throw new Error('The free daily GPU time is used up. Try again later, or add a free Hugging Face token in 3D AI settings to get more.');
+    throw new Error(m === 'busy' ? 'The free 3D AI is restarting. Try again in a few minutes.' : m);
+  },
+  findGlb(o, host) {
+    let hit = null; const walk = x => { if (hit || !x) return; if (typeof x === 'object' && !Array.isArray(x) && (x.url || x.path) && /\.glb$/i.test(x.path || x.url || x.orig_name || '')) { hit = x.url || (host + '/file=' + x.path); return; }
+      if (typeof x === 'string') { if (/\.glb(\?|$)/i.test(x) && /^https?:/.test(x)) hit = x; return; } if (typeof x === 'object') for (const k in x) walk(x[k]); };
+    walk(o); return hit;
   }
 };
 
@@ -10530,12 +10562,11 @@ const Rev = {
     for (const f of Rev.frames) G.append(el('button', { class: used.has(f) ? 'used' : '', onclick: () => { Rev.pick[Rev.sel] = f; const i = SLOTS.findIndex(s => s[0] === Rev.sel); Rev.sel = SLOTS[(i + 1) % 4][0]; Rev.render(); } }, el('img', { src: f.thumb, alt: '' })));
     $('#revCount').textContent = Rev.frames.length + ' photos';
     const P = Svc.list[Svc.pick()], box = $('#revSvc'); box.textContent = '';
-    box.append(el('div', { class: 'ai-row' }, el('b', null, Svc.ready() ? 'Built by ' + P.name : 'Set up the 3D service first')),
-      el('p', null, Svc.ready() ? 'Takes about 1 to 5 minutes. Cost: ' + P.price + ', paid to fal.ai.' : 'Realistic models are built on a 3D AI server. Tap Build to add your fal.ai key (about $0.50 to $0.70 per model).'),
-      el('button', { class: 'btn', onclick: async () => { await Svc.settings(); Rev.render(); } }, 'Change 3D service'));
+    box.append(el('div', { class: 'ai-row' }, el('b', null, 'Built free by ' + Svc.label())),
+      el('p', null, 'Open-source 3D AI on free GPUs. Usually 1 to 4 minutes, sometimes longer if many people are using it. No payment.'),
+      el('button', { class: 'btn', onclick: async () => { await Svc.settings(); Rev.render(); } }, 'Change 3D AI'));
   },
   async build() {
-    if (!Svc.ready() && !await Svc.settings()) return;
     const views = {}; for (const [k] of SLOTS) views[k] = Rev.pick[k].url;
     const rec = { id: uid(), kind: 'service', name: 'Product ' + ((await DB.scans()).length + 1), created: Date.now(), thumb: Rev.pick.front.thumb, views, state: 'sending' };
     $('#rev').hidden = true; await DB.putScan(rec); Home.render(); Obj.open(rec);
@@ -10566,9 +10597,10 @@ const Obj = {
     $('#v3ThBox').hidden = rec.kind !== 'draft'; $('#v3Th').value = rec.thick || 1; $('#v3ThV').textContent = Math.round((rec.thick || 1) * 100) + '%';
     $('#v3Honest').textContent = rec.kind === 'draft'
       ? 'Quick draft: the front is shaped from the depth in one photo, the back and sides are guessed. For a realistic model all the way round, use 360° scan.'
-      : 'Built by a 3D AI server from four of your photos (front, sides, back). The shape and colours are reconstructed from those views, so it looks real from every side, but small hidden details can differ from the real product. It is not a millimetre-exact measurement.';
+      : 'Built for free by open-source 3D AI (Hunyuan3D 2 or TRELLIS) from your photos. The AI reconstructs shape and texture from those views, so it looks real from every side, but small hidden details can differ from the real product. It is not a millimetre-exact measurement.';
     Obj.clearView();
     if (rec.glb) Obj.show();
+    else if (rec.kind === 'service' && rec.state === 'error') { Obj.state('err', 'Could not build the model', rec.err || ''); $('#v3Retry').hidden = false; }
     else if (rec.kind === 'service') Obj.runService(rec, tok);
   },
   state(kind, title, info) {
@@ -10577,21 +10609,16 @@ const Obj = {
     $('#v3Retry').hidden = kind !== 'err' || !Obj.rec || Obj.rec.kind !== 'service';
   },
   async runService(rec, tok) {
-    const live = () => tok === Obj.tok && !$('#v3d').hidden;
+    const live = () => tok === Obj.tok && !$('#v3d').hidden, t0 = Date.now(); let head = 'Sending your photos';
     try {
-      if (!rec.job) {
-        Obj.state('busy', 'Sending your photos', 'Uploading 4 photos to ' + Svc.list[Svc.pick()].name + '.');
-        rec.job = await Svc.submit(rec.views); rec.state = 'building'; await DB.putScan(rec);
-      }
-      if (live()) Obj.state('busy', 'Building your 3D model', 'This usually takes 1 to 5 minutes. You can leave this page; it continues when you come back.');
-      const t0 = rec.job.t0 || Date.now();
-      const glb = await Svc.wait(rec.job, s => { if (!live()) return; const sec = Math.round((Date.now() - t0) / 1000);
-        Obj.state('busy', s.status === 'IN_QUEUE' ? 'Waiting in line at the 3D service' + (s.queue_position != null ? ' (' + s.queue_position + ' ahead)' : '') : 'Building your 3D model', 'Working for ' + Math.floor(sec / 60) + ' min ' + (sec % 60) + ' s. You can leave this page; it continues when you come back.'); });
-      rec.glb = glb; rec.state = 'done'; rec.views = null; delete rec.job; await DB.putScan(rec); Home.render();
+      rec.state = 'building'; delete rec.job; await DB.putScan(rec);
+      const glb = await Svc.build(rec.views, (h, sec) => { if (h) head = h; if (!live()) return; const t = Math.round((Date.now() - t0) / 1000);
+        Obj.state('busy', head, 'Working for ' + Math.floor(t / 60) + ' min ' + (t % 60) + ' s. Keep this page open until it is done.'); });
+      rec.glb = glb; rec.state = 'done'; rec.views = null; await DB.putScan(rec); Home.render();
       if (Obj.rec && Obj.rec.id === rec.id && !$('#v3d').hidden) Obj.show(true);
     } catch (e) {
-      rec.state = 'error'; rec.err = (e && e.message) || String(e); if (/key|credit|unexpected|could not build|no 3D file/i.test(rec.err)) delete rec.job; await DB.putScan(rec).catch(() => {}); Home.render();
-      if (live()) Obj.state('err', 'Could not build the model', rec.err + (/Failed to fetch|NetworkError|Load failed/i.test(rec.err) ? ' Check your internet connection.' : ''));
+      rec.state = 'error'; rec.err = (e && e.message) || String(e); await DB.putScan(rec).catch(() => {}); Home.render();
+      if (live()) { $('#v3Retry').hidden = false; } if (live()) Obj.state('err', 'Could not build the model', rec.err + (/Failed to fetch|NetworkError|Load failed/i.test(rec.err) ? ' Check your internet connection.' : ''));
     }
   },
   async show(thumbAfter) {
@@ -10707,7 +10734,7 @@ const Home = {
   },
   async menu() {
     const v = await dialog({ title: 'More', list: true, actions: [
-      { label: 'How to scan well', value: 'stips' }, { label: '3D service and key', value: 'svc' }, { label: 'Check my device', value: 'check' }, { label: 'Close', kind: 'ghost', value: null }] });
+      { label: 'How to scan well', value: 'stips' }, { label: '3D AI settings', value: 'svc' }, { label: 'Check my device', value: 'check' }, { label: 'Close', kind: 'ghost', value: null }] });
     if (v === 'stips') Home.scanTips();
     if (v === 'svc') Svc.settings();
     if (v === 'demo') Demo.start();
