@@ -1,16 +1,18 @@
-# PicAlive 3D
+# PicAlive Room
 
-Turn real products into 3D models you can spin all the way round and place in your room at real size.
+See it in your room before you buy or sell. Real-size 3D for furniture, wall art and products, placed in your room with AR. Free, in the browser.
 
-**Open the app:** https://afaqali11.github.io/picalive/
+**Open the app:** https://afaqali11.github.io/picalive/ (Safari on iPhone, Chrome on Android)
 
-## How to use it
-1. Open the link above on your phone in Safari (iPhone) or Chrome (Android).
-2. Tap **New 360° scan** and walk slowly around the product. The app takes sharp photos by itself and shows a ring that fills as you go round.
-3. Check the four main views (front, left, back, right) and tap **Build 3D model**. The photos go to free open-source 3D AI on Hugging Face: Hunyuan3D 2 multi-view (Tencent) first, TRELLIS (Microsoft) if that one is busy. No payment. Free GPU time has a daily limit; a free Hugging Face token (in **3D AI**) raises it and stays only on your phone.
-4. Turn the model with your finger, tap **View in my room** to place it at real size, or save it as GLB or USDZ (iPhone).
+## What you can do
+- **Plan a room:** pick from 100+ photo-scanned furniture models (sofas, chairs, tables, beds, shelves, plants, lamps), move and turn them, then tap **See in my room** to place the whole set at real size.
+- **Wall art:** turn any photo into a framed print (A4 to 100 × 150 cm; black, white, oak, walnut, gold or canvas) and hang it on your wall in AR.
+- **Rug or floor mat:** any design at real size on your floor.
+- **Box or package:** type the size, add a photo of each side, get an exact 3D box.
+- **Bottle, can or jar:** one side photo; the app measures the outline and spins it into a perfectly round model.
+- **AI 360° scan:** free open-source 3D AI on Hugging Face for any other object (experimental).
 
-**Quick draft from 1 photo** builds a rough model on your phone for free. The back is guessed, so use a 360° scan for a real model.
+Every model can be saved as GLB or USDZ.
 
-## What is inside
-`index.html` is the app (three.js bundled inside). `ai/` holds the on-device cut-out and depth AI used for quick drafts (see `ai/NOTICE.md`). `mv/` holds Google's model-viewer (Apache-2.0, see `mv/LICENSE.txt`) for the 360° viewer and AR placement.
+## Credits
+Furniture: [Poly Haven](https://polyhaven.com) (CC0) and the [Khronos glTF sample models](https://github.com/KhronosGroup/glTF-Sample-Assets) (CC BY 4.0). The catalog is built by `.github/workflows/catalog.yml`. Viewer and AR: Google model-viewer (Apache-2.0, `mv/`). Drawing: three.js. On-device cut-out AI: see `ai/NOTICE.md`.
