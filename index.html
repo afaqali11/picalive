@@ -13114,7 +13114,7 @@ function home() {
   const X = k => window.PicAliveExtra && window.PicAliveExtra[k] ? window.PicAliveExtra[k]() : toast('Coming soon');
   const I = (img, title, how, fn, tag) => el('button', { class: 'intent', onclick: fn }, img[0] === '#' ? el('i', { class: 'ic', style: `background:${img.split('|')[1]}` }, svg(img.slice(1).split('|')[0])) : el('i', { style: `background-image:url('${img}')` }), el('div', null, el('b', null, title, tag ? el('em', null, tag) : ''), el('span', null, how)), svg('M9 5l7 7-7 7'));
   const intents = el('div', { class: 'intents' },
-    I(lookImg('organic-villa'), 'Design or decorate my home', 'Pick a look or a room, it comes furnished. Change anything, walk through it, see it in AR.', () => D.start()),
+    I(lookImg('organic-villa'), 'Design or decorate my home', 'Pick a look, it comes furnished. Change anything, see it in AR.', () => D.start()),
     I('#M4 4h13v5H4zM17 6h3v6h-8v3M11 15h2v6h-2z|linear-gradient(135deg,#9caf88 0 33%,#c0714f 33% 66%,#2b3a55 66%)', 'Paint my walls', 'Point at a wall and tap it. See any colour live, with real light.', () => X('openPaint'), 'NEW'),
     I('#M12 3c2 3 5 5 5 9a5 5 0 01-10 0c0-4 3-6 5-9zM9 13c1 1 2 1.5 3 1.5|linear-gradient(135deg,#c8936f,#8a5a3c)', 'Try a tattoo on my skin', 'Show your arm or hand. The tattoo sticks to your skin as you move.', () => window.PicAliveTattoo ? window.PicAliveTattoo.open() : toast('Coming soon'), 'NEW'),
     I('#M5 20c0-9 3-15 7-15s7 6 7 15M8 20c0-6 1.5-10 4-10s4 4 4 10|linear-gradient(135deg,#d77a98,#6f1f2c 70%)', 'Try a new hair colour', 'Look at the camera. Your hair changes colour live.', () => X('openHair'), 'NEW'),
