@@ -78,13 +78,17 @@ try {
   const all = (tree.tree || []).filter(f => f.type === 'blob' && f.path.startsWith(pre)), glbs = all.filter(f => /\.glb$/i.test(f.path)), pngs = all.filter(f => /Previews\/[^/]+\.png$/i.test(f.path));
   console.log('food kit glbs', glbs.length, 'previews', pngs.length);
   const raw = p2 => `https://raw.githubusercontent.com/${repo}/${br}/${p2.split('/').map(encodeURIComponent).join('/')}`;
-  const plate = glbs.find(f => /\/plate\.glb$/i.test(f.path)); let k = 1; if (plate) { const t = '/tmp/plate.glb'; fs.writeFileSync(t, await get(raw(plate.path), 'buf')); const s = await size(t); k = 0.26 / Math.max(s[0], s[2]); } console.log('food scale', k);
+  const KF = '/tmp/kf'; fs.mkdirSync(KF + '/Textures', { recursive: true });
+  for (const t of all.filter(f => /\/Textures\/[^/]+\.png$/i.test(f.path) && f.path.includes('GLB'))) fs.writeFileSync(KF + '/Textures/' + path.basename(t.path), await get(raw(t.path), 'buf'));
+  if (!fs.readdirSync(KF + '/Textures').length) for (const t of all.filter(f => /\/Textures\/[^/]+\.png$/i.test(f.path))) fs.writeFileSync(KF + '/Textures/' + path.basename(t.path), await get(raw(t.path), 'buf'));
+  console.log('food textures', fs.readdirSync(KF + '/Textures'));
+  const plate = glbs.find(f => /\/plate\.glb$/i.test(f.path)); let k = 1; if (plate) { const t = KF + '/plate.glb'; fs.writeFileSync(t, await get(raw(plate.path), 'buf')); const s = await size(t); k = 0.26 / Math.max(s[0], s[2]); } console.log('food scale', k);
   const KEEP = /plate|bowl|cup|mug|pan|pot|glass|bottle|kettle|jar|fruit|apple|banana|orange|pear|lemon|bread|cake|pie|teapot|cutting|board|knife|whisk|ladle|tray|basket|wine|coffee|vase|dish|pizza|croissant|donut|muffin|cookie|cheese|carton|can/i;
   let n = 0;
   for (const f of glbs) { const base = path.basename(f.path, '.glb'); if (!KEEP.test(base) || n >= 70) continue; const id = 'kf_' + base;
-    try { const src = '/tmp/' + id + '.glb'; fs.writeFileSync(src, await get(raw(f.path), 'buf')); const d = await io.read(src);
+    try { const src = KF + '/' + id + '.glb'; fs.writeFileSync(src, await get(raw(f.path), 'buf')); const d = await io.read(src);
       for (const nd of d.getRoot().listScenes()[0].listChildren()) { const s2 = nd.getScale(), t = nd.getTranslation(); nd.setScale([s2[0] * k, s2[1] * k, s2[2] * k]); nd.setTranslation([t[0] * k, t[1] * k, t[2] * k]); }
-      await io.write(src, d); await build(id, [[id + '.glb', fs.readFileSync(src)]], 'Kenney Food Kit (CC0)', { name: base.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, c => c.toUpperCase()), cats: ['kitchen decor'], tags: ['kitchen', base], style: 'simple' });
+      const out2 = KF + '/' + id + '_s.glb'; await io.write(out2, d); await build(id, [[id + '.glb', fs.readFileSync(out2)]], 'Kenney Food Kit (CC0)', { name: base.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, c => c.toUpperCase()), cats: ['kitchen decor'], tags: ['kitchen', base], style: 'simple' });
       const pv = pngs.find(q => path.basename(q.path, '.png').toLowerCase() === base.toLowerCase()); if (pv) fs.writeFileSync(path.join(OUT, 't', id + '.png'), await get(raw(pv.path), 'buf')); n++;
     } catch (e) { console.log('fail', id, e.message.slice(0, 160)); } }
 } catch (e) { console.log('food kit fail', e.message); }
