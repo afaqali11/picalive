@@ -13205,7 +13205,7 @@ async function loadAI(kind, mode) {
   if (!AI.fs) AI.fs = await AI.lib.FilesetResolver.forVisionTasks(new URL('tv', location.href).href);
   const make = async (K, file, extra) => { let err; for (const delegate of ['GPU', 'CPU']) { try { return await AI.lib[K].createFromOptions(AI.fs, { baseOptions: { modelAssetPath: new URL('tv/' + file, location.href).href, delegate }, runningMode: mode, ...extra }); } catch (e) { err = e; } } throw err; };
   if (kind === 'pose' && !AI.pose) { AI.pose = await make('PoseLandmarker', 'pose_landmarker_full.task', { numPoses: 1, minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.6 }); AI.mode.pose = mode; }
-  if (kind === 'hand' && !AI.hand) { AI.hand = await make('HandLandmarker', 'hand_landmarker.task', { numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.6 }); AI.mode.hand = mode; }
+  if (kind === 'hand' && !AI.hand) { AI.hand = await make('HandLandmarker', 'hand_landmarker.task', { numHands: 2, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.6 }); AI.mode.hand = mode; }
   const m = AI[kind]; if (m && AI.mode[kind] !== mode) { await m.setOptions({ runningMode: mode }); AI.mode[kind] = mode; }
 }
 /* One Euro filter: steady when you hold still, no lag when you move fast */
@@ -13239,7 +13239,8 @@ const SPOTS = {
    Pyramidal Lucas-Kanade optical flow on a 480 px grey copy of each camera frame, then a robust (RANSAC) perspective fit
    from where each detail was when the tattoo was locked to where it is now. The tattoo moves with those pixels. */
 const FLOW = {
-  frame(fc) { const s = 480 / Math.max(fc.width, fc.height), w = Math.round(fc.width * s), h = Math.round(fc.height * s);
+  RES: 640,
+  frame(fc) { const s = FLOW.RES / Math.max(fc.width, fc.height), w = Math.round(fc.width * s), h = Math.round(fc.height * s);
     const c = FLOW.cv || (FLOW.cv = cv(w, h)); if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(fc, 0, 0, w, h);
     const d = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h); for (let i = 0, n = w * h; i < n; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
     const L = [{ d: g, w, h }]; for (let l = 1; l < 4; l++) { const p = L[l - 1], W2 = p.w >> 1, H2 = p.h >> 1, q = new Float32Array(W2 * H2);
@@ -13256,6 +13257,18 @@ const FLOW = {
         const dvx = (Cc * bx - B * by) / det, dvy = (A * by - B * bx) / det; vx += dvx; vy += dvy; if (dvx * dvx + dvy * dvy < 1e-4) break; }
       if (l) { gx = 2 * (gx + vx); gy = 2 * (gy + vy); } else { gx += vx; gy += vy; } }
     const nx = x + gx, ny = y + gy, l0 = Q[0]; return nx < 2 || ny < 2 || nx > l0.w - 3 || ny > l0.h - 3 ? null : [nx, ny]; },
+  // key-frame snap: the skin patch as it looked at lock time, turned and scaled the way it is now (J = local warp), matched in the new frame
+  lkT(K, Q, ax, ay, J, cx, cy, top = 2) { const R = 5, m = 2 * R + 1, d = J[0] * J[3] - J[1] * J[2]; if (Math.abs(d) < 1e-6) return null; const iA = [J[3] / d, -J[1] / d, -J[2] / d, J[0] / d];
+    let px = cx, py = cy;
+    for (let l = top; l >= 0; l--) { const sc = 1 / (1 << l), k = K[l], q = Q[l], T = new Float32Array((m + 2) * (m + 2)); let c = 0;
+      for (let j = -R - 1; j <= R + 1; j++) for (let i = -R - 1; i <= R + 1; i++) T[c++] = FLOW.bil(k, ax * sc + iA[0] * i + iA[1] * j, ay * sc + iA[2] * i + iA[3] * j);
+      let A = 0, B = 0, Cc = 0; const Tx = new Float32Array(m * m), Ty = new Float32Array(m * m), Tv = new Float32Array(m * m); c = 0;
+      for (let j = 1; j <= m; j++) for (let i = 1; i <= m; i++, c++) { const o = j * (m + 2) + i, gx = (T[o + 1] - T[o - 1]) * 0.5, gy = (T[o + m + 2] - T[o - m - 2]) * 0.5; Tx[c] = gx; Ty[c] = gy; Tv[c] = T[o]; A += gx * gx; B += gx * gy; Cc += gy * gy; }
+      const det = A * Cc - B * B; if (det < 1e-3) return null; let x0 = px * sc, y0 = py * sc;
+      for (let it = 0; it < 6; it++) { let bx = 0, by = 0; c = 0; for (let j = -R; j <= R; j++) for (let i = -R; i <= R; i++, c++) { const e = Tv[c] - FLOW.bil(q, x0 + i, y0 + j); bx += e * Tx[c]; by += e * Ty[c]; }
+        const dx = -(Cc * bx - B * by) / det, dy = -(A * by - B * bx) / det; x0 -= dx; y0 -= dy; if (dx * dx + dy * dy < 1e-4) break; }
+      px = x0 / sc; py = y0 / sc; }
+    return [px, py]; },
   // good details to follow (Shi-Tomasi corners) inside a convex quad
   corners(quad, max, avoid) { const l = FLOW.cur.L[0], w = l.w, h = l.h, d = l.d; let x0 = w, y0 = h, x1 = 0, y1 = 0; for (const q of quad) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
     x0 = Math.max(3, x0 | 0); y0 = Math.max(3, y0 | 0); x1 = Math.min(w - 4, x1 | 0); y1 = Math.min(h - 4, y1 | 0); if (x1 - x0 < 8 || y1 - y0 < 8) return [];
@@ -13279,30 +13292,45 @@ const FLOW = {
     // undo the normalisation: H = Tdst^-1 · Hn · Tsrc
     const Ts = [ss, 0, -ss * mx, 0, ss, -ss * my, 0, 0, 1], Td = [1 / sd, 0, Mx, 0, 1 / sd, My, 0, 0, 1]; return FLOW.mul(Td, FLOW.mul(h, Ts)); },
   mul(a, b) { const r = new Array(9); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j]; return r; },
+  sane(lk, H) { const q1 = FLOW.quadOf(lk.G0, 1), q0 = q1.map(c => FLOW.ap(H, c[0], c[1])); let A = 0, A0 = 0, sg = 0; for (let i = 0; i < 4; i++) { const u = q0[i], v = q0[(i + 1) % 4], w = q0[(i + 2) % 4], u1 = q1[i], v1 = q1[(i + 1) % 4]; A += u[0] * v[1] - v[0] * u[1]; A0 += u1[0] * v1[1] - v1[0] * u1[1]; sg += Math.sign((v[0] - u[0]) * (w[1] - v[1]) - (v[1] - u[1]) * (w[0] - v[0])); } const ra = A / A0; return ra > 0.3 && ra < 3 && Math.abs(sg) === 4; },
   ap(H, x, y) { const w = H[6] * x + H[7] * y + H[8]; return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w]; },
   inv(m) { const [a, b, c, d, e, f, g, h, i] = m, A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C; if (Math.abs(det) < 1e-12) return null;
     return [A / det, -(b * i - c * h) / det, (b * f - c * e) / det, B / det, (a * i - c * g) / det, -(a * f - c * d) / det, C / det, -(a * h - b * g) / det, (a * e - b * d) / det]; },
   // RANSAC: keep the details that move together (skin), drop the ones that don't (background, sleeves)
-  robust(src, dst) { const n = src.length; if (n < 6) return null; let best = null, bestIn = [];
-    for (let it = 0; it < 60; it++) { const pick = new Set(); while (pick.size < 4) pick.add((Math.random() * n) | 0); const ids = [...pick], H = FLOW.fitH(ids.map(i => src[i]), ids.map(i => dst[i])); if (!H) continue;
+  robust(src, dst, minIn, minFrac) { const n = src.length; if (n < 6) return null; let best = null, bestIn = [];
+    let seed = 12345; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    for (let it = 0; it < 120; it++) { const pick = new Set(); while (pick.size < 4) pick.add((rnd() * n) | 0); const ids = [...pick], H = FLOW.fitH(ids.map(i => src[i]), ids.map(i => dst[i])); if (!H) continue;
       const inl = []; for (let i = 0; i < n; i++) { const q = FLOW.ap(H, src[i][0], src[i][1]); if (Math.hypot(q[0] - dst[i][0], q[1] - dst[i][1]) < 2.5) inl.push(i); } if (inl.length > bestIn.length) { bestIn = inl; best = H; } if (inl.length > n * 0.85) break; }
-    if (bestIn.length < Math.max(6, n * 0.35)) return null; const H = FLOW.fitH(bestIn.map(i => src[i]), bestIn.map(i => dst[i])) || best; return { H, inl: bestIn }; },
+    if (bestIn.length < Math.max(minIn || 6, n * (minFrac || 0.35))) return null; const H = FLOW.fitH(bestIn.map(i => src[i]), bestIn.map(i => dst[i])) || best; return { H, inl: bestIn }; },
   quadOf(G, grow) { const C = GL.C, R2 = GL.R, ids = [0, C, (C + 1) * R2 + C, (C + 1) * R2], q = ids.map(k => [G[k * 2], G[k * 2 + 1]]), cx = q.reduce((a, p) => a + p[0], 0) / 4, cy = q.reduce((a, p) => a + p[1], 0) / 4;
     return q.map(p => [cx + (p[0] - cx) * grow, cy + (p[1] - cy) * grow]); },
-  start(G) { const pts = FLOW.corners(FLOW.quadOf(G, 1.15), 70); if (pts.length < 12) return null; return { G0: G.slice(), a: pts.map(p => p.slice()), p: pts, H: [1, 0, 0, 0, 1, 0, 0, 0, 1], bad: 0, age: 0, K: FLOW.cur.L }; },
-  step(lk) { const P = FLOW.prev, Q = FLOW.cur; if (!P || P.w !== Q.w || P.h !== Q.h) return false; const a = [], p = [];
+  // steady the result: filter the four corners (still = very smooth, moving = no lag), then rebuild the perspective from them
+  smooth(lk, t, mc = FLOW.MC, b = FLOW.B) { const q0 = FLOW.quadOf(lk.G0, 1), c = q0.map(q => FLOW.ap(lk.H, q[0], q[1])), size = Math.hypot(c[0][0] - c[2][0], c[0][1] - c[2][1]) || 1;
+    const F = lk.Fc || (lk.Fc = c.map(() => [new Euro(mc, b), new Euro(mc, b)])); const cf = c.map((q, i) => [F[i][0].f(q[0], t, size), F[i][1].f(q[1], t, size)]);
+    lk.Hs = FLOW.fitH(q0, cf) || lk.H; return lk.Hs; },
+  MC: 2, B: 30,
+  start(G) { const pts = FLOW.corners(FLOW.quadOf(G, 1.15), 70); if (pts.length < 12) return null; return { G0: G.slice(), a: pts.map(p => p.slice()), a0: pts.map(p => p.slice()), p: pts, H: [1, 0, 0, 0, 1, 0, 0, 0, 1], bad: 0, age: 0, K: FLOW.cur.L }; },
+  // find the same skin again from the key frame, starting from a guess Hp (from the body model, or the last known place)
+  reacquire(lk, Hp, rej) { const Q = FLOW.cur, src = [], dst = [];
+    for (const a of lk.a0) { const pr = FLOW.ap(Hp, a[0], a[1]), px1 = FLOW.ap(Hp, a[0] + 1, a[1]), py1 = FLOW.ap(Hp, a[0], a[1] + 1);
+      if (pr[0] < 4 || pr[1] < 4 || pr[0] > Q.w - 5 || pr[1] > Q.h - 5) continue; const q = FLOW.lkT(lk.K, Q.L, a[0], a[1], [px1[0] - pr[0], py1[0] - pr[0], px1[1] - pr[1], py1[1] - pr[1]], pr[0], pr[1], 3);
+      if (q && Math.hypot(q[0] - pr[0], q[1] - pr[1]) < 40 && !(rej && rej(q[0], q[1]))) { src.push(a); dst.push(q); } }
+    const fit = FLOW.robust(src, dst); if (!fit || fit.inl.length < Math.max(12, lk.a0.length * 0.3)) return false;
+    lk.H = fit.H; lk.a = fit.inl.map(i => src[i]); lk.p = fit.inl.map(i => dst[i]); lk.vx = lk.vy = 0; lk.lost = 0; lk.Fc = null; return true; },
+  step(lk, rej) { const P = FLOW.prev, Q = FLOW.cur; if (!P || P.w !== Q.w || P.h !== Q.h) return false; const a = [], p = [];
     const vx = lk.vx || 0, vy = lk.vy || 0;
-    for (let i = 0; i < lk.p.length; i++) { let f = FLOW.lk(P.L, Q.L, lk.p[i][0], lk.p[i][1], vx, vy); if (!f && (vx || vy)) f = FLOW.lk(P.L, Q.L, lk.p[i][0], lk.p[i][1]); if (!f) continue; const bk = FLOW.lk(Q.L, P.L, f[0], f[1], -(f[0] - lk.p[i][0]), -(f[1] - lk.p[i][1])); if (!bk || Math.hypot(bk[0] - lk.p[i][0], bk[1] - lk.p[i][1]) > 0.8) continue; a.push(lk.a[i]); p.push(f); }
-    const fit = FLOW.robust(a, p); if (!fit) return false;
+    for (let i = 0; i < lk.p.length; i++) { let f = FLOW.lk(P.L, Q.L, lk.p[i][0], lk.p[i][1], vx, vy); if (!f && (vx || vy)) f = FLOW.lk(P.L, Q.L, lk.p[i][0], lk.p[i][1]); if (!f) continue; const bk = FLOW.lk(Q.L, P.L, f[0], f[1], -(f[0] - lk.p[i][0]), -(f[1] - lk.p[i][1])); if (!bk || Math.hypot(bk[0] - lk.p[i][0], bk[1] - lk.p[i][1]) > 0.8) continue; if (rej && rej(f[0], f[1])) continue; a.push(lk.a[i]); p.push(f); }
+    const fit = FLOW.robust(a, p, 8, 0.2); if (!fit) return false;
     // reject impossible jumps (a flipped or collapsed shape)
     const q0 = FLOW.quadOf(lk.G0, 1).map(c => FLOW.ap(fit.H, c[0], c[1])); let area = 0; for (let i = 0; i < 4; i++) { const u = q0[i], v = q0[(i + 1) % 4]; area += u[0] * v[1] - v[0] * u[1]; }
     const q1 = FLOW.quadOf(lk.G0, 1); let a0 = 0; for (let i = 0; i < 4; i++) { const u = q1[i], v = q1[(i + 1) % 4]; a0 += u[0] * v[1] - v[0] * u[1]; } const ratio = area / a0; if (!(ratio > 0.25 && ratio < 4)) return false;
     // snap back to the look of the skin when it was locked (the key frame): stops slow drift, and fixes a bad jump
-    if (lk.K) { const a2 = [], q2 = []; let good = 0; for (const i of fit.inl) { const pr = FLOW.ap(fit.H, a[i][0], a[i][1]), q = FLOW.lk(lk.K, Q.L, a[i][0], a[i][1], pr[0] - a[i][0], pr[1] - a[i][1]); if (q && Math.hypot(q[0] - pr[0], q[1] - pr[1]) < 6) { a2.push(a[i]); q2.push(q); good++; } }
-      if (good >= Math.max(10, fit.inl.length * 0.5)) { const f2 = FLOW.robust(a2, q2); if (f2) { fit.H = f2.H; } } else if (good < fit.inl.length * 0.25) lk.rekey = (lk.rekey || 0) + 1; }
+    if (lk.K) { const a2 = [], q2 = []; let good = 0; for (const i of fit.inl) { const pr = FLOW.ap(fit.H, a[i][0], a[i][1]), px1 = FLOW.ap(fit.H, a[i][0] + 1, a[i][1]), py1 = FLOW.ap(fit.H, a[i][0], a[i][1] + 1), q = FLOW.lkT(lk.K, Q.L, a[i][0], a[i][1], [px1[0] - pr[0], py1[0] - pr[0], px1[1] - pr[1], py1[1] - pr[1]], pr[0], pr[1], lk.noSnap > 2 ? 3 : 2); if (q && Math.hypot(q[0] - pr[0], q[1] - pr[1]) < (lk.noSnap > 2 ? 30 : 12)) { a2.push(a[i]); q2.push(q); good++; } }
+      if (good >= Math.max(10, fit.inl.length * 0.35)) { const f2 = FLOW.robust(a2, q2); if (f2) { fit.H = f2.H; fit.snap = true; } } else if (good < fit.inl.length * 0.25) lk.rekey = (lk.rekey || 0) + 1; }
     { const mid = FLOW.quadOf(lk.G0, 1).reduce((m, c) => [m[0] + c[0] / 4, m[1] + c[1] / 4], [0, 0]), c0 = FLOW.ap(lk.H, mid[0], mid[1]), c1 = FLOW.ap(fit.H, mid[0], mid[1]); lk.vx = c1[0] - c0[0]; lk.vy = c1[1] - c0[1]; }
-    lk.H = fit.H; lk.a = fit.inl.map(i => a[i]); lk.p = fit.inl.map(i => p[i]); lk.age++;
-    if (lk.p.length < 45) { const Hi = FLOW.inv(lk.H); if (Hi) for (const q of FLOW.corners(FLOW.quadOf(lk.G0.map((v, i) => v), 1.15).map(c => FLOW.ap(lk.H, c[0], c[1])), 70 - lk.p.length, lk.p)) { lk.p.push(q); lk.a.push(FLOW.ap(Hi, q[0], q[1])); } }
+    { let sc = 0, sk = 0; for (let i = 0; i < lk.a.length && i < 40; i++) { const q = FLOW.ap(fit.H, lk.a[i][0], lk.a[i][1]); sc += FLOW.bil(Q.L[1], q[0] / 2, q[1] / 2); sk += FLOW.bil(lk.K[1], lk.a[i][0] / 2, lk.a[i][1] / 2); } if (sk > 0) lk.gain = (lk.gain || 1) * 0.85 + (sc / sk) * 0.15; }
+    lk.snapped = !!fit.snap; lk.noSnap = fit.snap ? 0 : (lk.noSnap || 0) + 1; lk.H = fit.H; lk.a = fit.inl.map(i => a[i]); lk.p = fit.snap ? lk.a.map(q => FLOW.ap(fit.H, q[0], q[1])) : fit.inl.map(i => p[i]); lk.age++;   // snapped: put every detail back exactly where the key frame says
+    if (lk.p.length < 45) { const Hi = FLOW.inv(lk.H); if (Hi) for (const q of FLOW.corners(FLOW.quadOf(lk.G0.map((v, i) => v), 1.15).map(c => FLOW.ap(lk.H, c[0], c[1])), 70 - lk.p.length, lk.p)) { if (rej && rej(q[0], q[1])) continue; lk.p.push(q); lk.a.push(FLOW.ap(Hi, q[0], q[1])); } }
     return true; }
 };
 
@@ -13318,9 +13346,22 @@ const GL = {
     GL.bg.frustumCulled = false; GL.scene.add(GL.bg);
     const C = GL.C = 28, R2 = GL.R = 14, n = (C + 1) * (R2 + 1), idx = []; const g = new THREE.BufferGeometry(), uv = new Float32Array(n * 2);
     for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i; uv[k * 2] = i / C; uv[k * 2 + 1] = 1 - j / R2; if (i < C && j < R2) idx.push(k, k + C + 1, k + 1, k + 1, k + C + 1, k + C + 2); }
-    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('fade', new THREE.Float32BufferAttribute(new Float32Array(n), 1).setUsage(THREE.DynamicDrawUsage)); g.setIndex(idx);
-    GL.ink = new THREE.Mesh(g, new THREE.ShaderMaterial({ uniforms: { map: { value: null }, op: { value: 0.9 }, healed: { value: 0 } }, vertexShader: vs,
-      fragmentShader: 'uniform sampler2D map; uniform float op; uniform float healed; varying vec2 vUv; varying float vF; void main(){ vec4 t = texture2D(map, vUv, healed * 0.7); vec3 ink = mix(t.rgb, vec3(0.10, 0.16, 0.17), healed * 0.45); float a = clamp(t.a * op * vF * (1.0 - healed * 0.18), 0.0, 1.0); gl_FragColor = vec4(mix(vec3(1.0), ink, a), 1.0); }',
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('fade', new THREE.Float32BufferAttribute(new Float32Array(n), 1).setUsage(THREE.DynamicDrawUsage)); g.setAttribute('ck', new THREE.Float32BufferAttribute(new Float32Array(n * 4), 4).setUsage(THREE.DynamicDrawUsage)); g.setIndex(idx);
+    GL.rtex = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat); GL.rtex.needsUpdate = true;
+    GL.occCv = cv(16); GL.otex = new THREE.CanvasTexture(GL.occCv); GL.otex.minFilter = THREE.LinearFilter; GL.otex.generateMipmaps = false;
+    GL.keyCv = cv(16); GL.ktex = new THREE.CanvasTexture(GL.keyCv); GL.ktex.minFilter = THREE.LinearFilter; GL.ktex.generateMipmaps = false;
+    // ink, plus "roto": where the camera now shows something different from the skin at lock time (a finger, the other hand, a pen), the ink is cut away
+    GL.ink = new THREE.Mesh(g, new THREE.ShaderMaterial({ uniforms: { map: { value: null }, op: { value: 0.9 }, healed: { value: 0 }, frame: { value: GL.ftex }, key: { value: GL.ktex }, omask: { value: GL.otex }, useHand: { value: 0 }, rmask: { value: GL.rtex }, useR: { value: 0 }, occ: { value: 0 }, gain: { value: 1 }, px: { value: new THREE.Vector2(0.002, 0.002) } },
+      vertexShader: 'attribute float fade; attribute vec4 ck; varying vec2 vUv; varying float vF; varying vec4 vCK; void main(){ vUv = uv; vF = fade; vCK = ck; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: `uniform sampler2D map; uniform sampler2D frame; uniform sampler2D key; uniform sampler2D omask; uniform float useHand; uniform sampler2D rmask; uniform float useR; uniform float op; uniform float healed; uniform float occ; uniform float gain; uniform vec2 px; varying vec2 vUv; varying float vF; varying vec4 vCK;
+        vec3 soft(sampler2D t, vec2 u){ return (texture2D(t, u).rgb * 4.0 + texture2D(t, u + vec2(px.x, 0.0)).rgb + texture2D(t, u - vec2(px.x, 0.0)).rgb + texture2D(t, u + vec2(0.0, px.y)).rgb + texture2D(t, u - vec2(0.0, px.y)).rgb) / 8.0; }
+        void main(){ vec4 t = texture2D(map, vUv, healed * 0.7); vec3 ink = mix(t.rgb, vec3(0.10, 0.16, 0.17), healed * 0.45); float a = clamp(t.a * op * vF * (1.0 - healed * 0.18), 0.0, 1.0);
+          if (occ > 0.5 && a > 0.003) { vec3 c = soft(frame, vCK.xy), k = soft(key, vCK.zw) * gain; vec3 cc = c / (c.r + c.g + c.b + 0.04), kc = k / (k.r + k.g + k.b + 0.04);
+            float lc = dot(c, vec3(0.299, 0.587, 0.114)), lk = dot(k, vec3(0.299, 0.587, 0.114)), dch = length(cc - kc), dl = abs(lc - lk) / (lk + 0.08);
+            a *= 1.0 - max(smoothstep(0.035, 0.075, dch), smoothstep(0.28, 0.5, dl)); }
+          if (useHand > 0.5) a *= 1.0 - smoothstep(0.3, 0.7, texture2D(omask, vCK.xy).r);
+          if (useR > 0.5) a *= 1.0 - smoothstep(0.35, 0.65, texture2D(rmask, vUv).r);
+          gl_FragColor = vec4(mix(vec3(1.0), ink, a), 1.0); }`,
       depthTest: false, depthWrite: false, side: THREE.DoubleSide, blending: 5, blendSrc: 208, blendDst: 200, blendEquation: 100 }));   // custom blending: result = ink × skin (multiply)
     GL.ink.frustumCulled = false; GL.ink.renderOrder = 2; GL.scene.add(GL.ink); },
   size() { const c = GL.r.domElement, w = c.clientWidth || innerWidth, h = c.clientHeight || innerHeight; if (GL.w !== w || GL.h !== h) { GL.w = w; GL.h = h; GL.r.setSize(w, h, false); } },
@@ -13355,7 +13396,7 @@ const T = {
     T.setSpot(T.spot);
   },
   say(t, ok) { if (T.status.textContent !== t) T.status.textContent = t; T.status.classList.toggle('ok', !!ok); },
-  async setSpot(k) { T.dropLock(); T.last = null; T.spot = k; T.off = { u: 0, v: 0 }; T.geo = null; T.raw = null; T.F = {}; for (const b of T.spotsEl.children) b.classList.toggle('on', b.textContent === SPOTS[k].name);
+  async setSpot(k) { T.dropLock(); T.last = null; T.own = null; T.ownAt = null; T.ownLm = null; T.occHands = null; T.spot = k; T.off = { u: 0, v: 0 }; T.geo = null; T.raw = null; T.F = {}; for (const b of T.spotsEl.children) b.classList.toggle('on', b.textContent === SPOTS[k].name);
     const need = SPOTS[k].need; if (!need) { T.ready = true; return; } T.ready = false; T.say('Loading ' + (need === 'pose' ? 'arm' : 'hand') + ' tracking (first time only)...');
     try { await loadAI(need, T.still ? 'IMAGE' : 'VIDEO'); T.ready = true; if (T.still) T.detectStill(); } catch (e) { T.say('Tracking could not start here. Drag the tattoo into place.'); T.spot = 'free'; T.ready = true; } },
   async startCam() { if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.still = null;
@@ -13379,7 +13420,14 @@ const T = {
     if (sp.need === 'pose' && AI.pose) { const r = image ? AI.pose.detect(src) : AI.pose.detectForVideo(src, t); lm = r.landmarks && r.landmarks[0]; wl = r.worldLandmarks && r.worldLandmarks[0];
       if (lm) { const side = [[11, 13, 15], [12, 14, 16]].map(s2 => ({ s: s2, v: s2.reduce((a2, i) => a2 + (lm[i].visibility || 0), 0) })).sort((x, y) => y.v - x.v)[0].s;
         const [ia, ib] = T.spot === 'forearm' ? [side[1], side[2]] : [side[0], side[1]]; if (!((lm[ia].visibility ?? 1) > 0.5 && (lm[ib].visibility ?? 1) > 0.5)) lm = null; else { extra = { ia, ib }; keys = [...Array(33).keys()].filter(i => i > 10 && (lm[i].visibility ?? 1) > 0.6 || i === ia || i === ib); } } }
-    if (sp.need === 'hand' && AI.hand) { const r = image ? AI.hand.detect(src) : AI.hand.detectForVideo(src, t); lm = r.landmarks && r.landmarks[0]; wl = r.worldLandmarks && r.worldLandmarks[0]; keys = [...Array(21).keys()]; }
+    if (sp.need === 'hand' && AI.hand) { const r = image ? AI.hand.detect(src) : AI.hand.detectForVideo(src, t), hs = r.handedness || r.handednesses || [], lab = i => hs[i] && hs[i][0] && hs[i][0].categoryName;
+      // your tattooed hand is the one you started with (left or right); any other hand is something in front of it
+      let idx = r.landmarks && r.landmarks.length ? 0 : -1;
+      if (idx >= 0) { const near = i => T.ownLm ? r.landmarks[i].reduce((sm, q, j) => sm + Math.hypot(q.x * W - T.ownLm[j][0], q.y * H - T.ownLm[j][1]), 0) / 21 : 0, c = r.landmarks.map((_, i) => i).filter(i => !T.own || lab(i) === T.own).sort((x, y) => near(x) - near(y));
+        idx = c.length ? c[0] : -1; if (idx >= 0 && T.ownAt && near(idx) > Math.hypot(r.landmarks[idx][5].x * W - r.landmarks[idx][17].x * W, r.landmarks[idx][5].y * H - r.landmarks[idx][17].y * H) * 2.5) idx = -1;
+        if (idx >= 0) { if (!T.own && (T.lock || r.landmarks.length === 1)) T.own = lab(idx); T.ownAt = [r.landmarks[idx][9].x * W, r.landmarks[idx][9].y * H]; T.ownLm = r.landmarks[idx].map(q => [q.x * W, q.y * H]); } }
+      T.occHands = (r.landmarks || []).filter((_, i) => i !== idx).map(h => h.map(q => [q.x * W, q.y * H])); if (!image) T.occT = t;
+      lm = idx >= 0 ? r.landmarks[idx] : null; wl = idx >= 0 && r.worldLandmarks ? r.worldLandmarks[idx] : null; keys = [...Array(21).keys()]; }
     if (!lm) { if (++T.lost > 8) { T.raw = null; T.cam = null; T.F = {}; } return; } T.lost = 0;
     const raw = {}, world = {}; for (const i of keys) { raw[i] = [lm[i].x * W, lm[i].y * H]; if (wl) world[i] = [wl[i].x, wl[i].y, wl[i].z]; }
     if (sp.need === 'hand') { sz = Math.hypot(raw[17][0] - raw[5][0], raw[17][1] - raw[5][1]) || 1; if (wl) wsz = V.len(V.sub(world[17], world[5])) || 0.07; }
@@ -13396,7 +13444,11 @@ const T = {
       const x = fc.getContext('2d'); if (!T.still || !T._stillDrawn || T._stillDrawn !== T.still) { x.drawImage(src, 0, 0, W, H); GL.ftex.needsUpdate = true; T._stillDrawn = T.still; }
       if (!T.still) { try { FLOW.frame(fc); } catch (e) {} }
       // while the skin lock holds, the body model only needs to check in now and then (keeps the frame rate high)
-      T.fn = (T.fn || 0) + 1; if (!T.still && T.ready && SPOTS[T.spot].need && (!T.lock || T.fn % 4 === 0)) { try { T.detect(fc, performance.now(), false); } catch (e) {} }
+      T.fn = (T.fn || 0) + 1; if (!T.still && T.ready && SPOTS[T.spot].need && (!T.lock || T.fn % 4 === 0 || SPOTS[T.spot].need === 'hand')) { try { T.detect(fc, performance.now(), false); } catch (e) {} }
+      // on the arm, a hand passing in front is found with the hand model
+      if (!T.still && T.lock && SPOTS[T.spot].need === 'pose') { if (!AI.hand) { if (!T.handLoading) { T.handLoading = true; loadAI('hand', 'VIDEO').catch(() => {}); } } else if (T.fn % 2 === 0) { try { const r = AI.hand.detectForVideo(fc, performance.now()), B = T.raw && T.raw.B, W2 = fc.width, H2 = fc.height;
+        T.occHands = (r.landmarks || []).map(h => h.map(q => [q.x * W2, q.y * H2])).filter(h => !(T.spot === 'forearm' && B && Math.hypot(h[0][0] - B[0], h[0][1] - B[1]) < Math.hypot(T.raw.B[0] - T.raw.A[0], T.raw.B[1] - T.raw.A[1]) * 0.35)); } catch (e) {} } }
+      T.drawOcc(W, H);
       T.layout(W, H); GL.r.render(GL.scene, GL.cam);
       if (!T.still && T.ready) { const sp = SPOTS[T.spot]; if (T.lock) T.say('Locked to your skin. Drag, pinch or twist to adjust.', true); else if (sp.need && !T.raw) T.say(sp.tip); else if ((T.noLock || 0) > 40) T.say('Not enough skin detail here. Draw a small pen mark where the tattoo goes for a solid lock.'); else T.say('Hold still a moment to lock it to your skin'); } };
     next(); },
@@ -13451,21 +13503,88 @@ const T = {
     const N = (C + 1) * (R2 + 1); let G = null, Fa = null; if (put && put !== 'none') { G = new Float32Array(N * 2); Fa = new Float32Array(N); for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i, q = put(i / C, j / R2); G[k * 2] = q[0]; G[k * 2 + 1] = q[1]; Fa[k] = q[2]; } }
     const out = T.skinStep(G, Fa, W, H); if (!out) { GL.ink.visible = false; T.lastM = M; T.lastWH = [W, H]; return; }
     for (let k = 0; k < N; k++) { const s2 = M.to(out.G[k * 2], out.G[k * 2 + 1]); P.setXYZ(k, s2[0], s2[1], 0); Fd.setX(k, out.F[k]); }
+    const lk = T.lock, um2 = GL.ink.material.uniforms; um2.occ.value = lk && !lk.lost && T.roto !== false && lk.keyW ? 1 : 0;
+    { const CK = g.attributes.ck, s = lk ? lk.s : 1; for (let k = 0; k < N; k++) CK.setXYZW(k, out.G[k * 2] / W, 1 - out.G[k * 2 + 1] / H, lk ? lk.G0[k * 2] / s / W : 0, lk ? 1 - lk.G0[k * 2 + 1] / s / H : 0); CK.needsUpdate = true; um2.gain.value = lk && lk.gain || 1; um2.px.value.set(1.5 / W, 1.5 / H); }
     P.needsUpdate = true; Fd.needsUpdate = true; GL.ink.visible = true; T.lastM = M; T.lastWH = [W, H]; },
   /* skin lock: lock once the tattoo is placed and steady, follow the skin, fall back to the body model if the skin is lost */
   skinStep(G, Fa, W, H) { if (T.still || !FLOW.cur) { if (G) T.last = { G, F: Fa }; return G ? { G, F: Fa } : null; }
-    const s = FLOW.cur.s, lk = T.lock;
-    if (lk) { if (FLOW.step(lk)) { const g = new Float32Array(lk.G0.length); for (let k = 0; k < g.length; k += 2) { const q = FLOW.ap(lk.H, lk.G0[k], lk.G0[k + 1]); g[k] = q[0] / s; g[k + 1] = q[1] / s; }
-        // if the body model says the tattoo is far away for a while, trust the model and lock again
-        if (G) { const c = (A, i) => (A[i] + A[A.length / 2 + i] ) / 2, mid = (G.length / 2) & ~1, dx = G[mid] - g[mid], dy = G[mid + 1] - g[mid + 1], size = Math.hypot(G[0] - G[G.length - 2], G[1] - G[G.length - 1]);
-          if (Math.hypot(dx, dy) > size * 0.6) { if (++lk.bad > 12) { T.dropLock(); return { G, F: Fa }; } } else lk.bad = 0; }
-        T.last = { G: g, F: lk.F }; return T.last; }
-      T.dropLock(); }
+    const s = FLOW.cur.s, lk = T.lock, t = performance.now() / 1000;
+    if (lk) { const N = lk.G0.length / 2, ids = [0, GL.C, N - 1 - GL.C, N - 1, (N >> 1)], warp = Hx => { const g = new Float32Array(lk.G0.length); for (let k = 0; k < g.length; k += 2) { const q = FLOW.ap(Hx, lk.G0[k], lk.G0[k + 1]); g[k] = q[0] / s; g[k + 1] = q[1] / s; } return g; };
+      // where the body model thinks the locked patch is now (a guess for finding it again, and a sanity check)
+      const Hm = G ? FLOW.fitH(ids.map(i => [lk.G0[i * 2], lk.G0[i * 2 + 1]]), ids.map(i => [G[i * 2] * s, G[i * 2 + 1] * s])) : null;
+      const rej0 = T.occRej(s), rej1 = T.rotoRej(lk), rej = rej0 && rej1 ? (x, y) => rej0(x, y) || rej1(x, y) : rej0 || rej1;
+      // most of the spot is covered: what is left to see is mostly the thing in front, so hold the tattoo where your skin was and wait
+      let cf = 0; if (T.rmPrev && lk.rinit) { for (const v of T.rmPrev) cf += v; cf /= T.rmPrev.length * 255; }
+      let ok = FLOW.step(lk, rej); if (ok) lk.lost = 0;
+      if (ok && Hm) { const m = ids[4], a = FLOW.ap(lk.H, lk.G0[m * 2], lk.G0[m * 2 + 1]), b = FLOW.ap(Hm, lk.G0[m * 2], lk.G0[m * 2 + 1]), size = Math.hypot(lk.G0[0] - lk.G0[(N - 1) * 2], lk.G0[1] - lk.G0[(N - 1) * 2 + 1]);
+        lk.bad = Math.hypot(a[0] - b[0], a[1] - b[1]) > size * 0.7 ? lk.bad + 1 : 0; }   // only noted: while the skin lock is healthy it wins, it is where you fixed the tattoo
+      if (!ok) { lk.lost = (lk.lost || 0) + 1; const lb = lk.lost, Hb = lk.H.slice(), pb = lk.p.map(q => q.slice()), ab = lk.a.map(q => q.slice()); ok = FLOW.reacquire(lk, lk.H, rej0) || (Hm && lk.lost > 3 && FLOW.reacquire(lk, Hm, rej0));
+        // found again, but far from where your skin was a moment ago and the body model does not agree: it is the hand in front, not yours
+        if (ok && lb < 30) { const m = ids[4], a0 = FLOW.ap(Hb, lk.G0[m * 2], lk.G0[m * 2 + 1]), a1 = FLOW.ap(lk.H, lk.G0[m * 2], lk.G0[m * 2 + 1]), size = Math.hypot(lk.G0[0] - lk.G0[(N - 1) * 2], lk.G0[1] - lk.G0[(N - 1) * 2 + 1]), bm = Hm ? FLOW.ap(Hm, lk.G0[m * 2], lk.G0[m * 2 + 1]) : null;
+          if (Math.hypot(a1[0] - a0[0], a1[1] - a0[1]) > size * 0.35 && !(bm && Math.hypot(a1[0] - bm[0], a1[1] - bm[1]) < size * 0.35)) { ok = false; lk.H = Hb; lk.p = pb; lk.a = ab; lk.lost = lb; } } }
+      if (ok) { T.last = { G: warp(FLOW.smooth(lk, t)), F: lk.F }; if (T.roto !== false) { try { T.rotoMask(lk); } catch (e) { GL.ink.material.uniforms.useR.value = 0; } } return T.last; }
+      if (T.roto !== false && lk.lost <= 3) { try { T.rotoMask(lk); } catch (e) {} }
+      // lost for a while usually means something covers the spot: keep the cut-out growing
+      if (T.rmPrev && lk.lost > 3) { const d = GL.rtex.image.data; for (let i = 0; i < d.length; i += 4) d[i] = Math.min(255, d[i] + 40); GL.rtex.needsUpdate = true; }
+      // lost for now: follow the body model (or hold still) while trying to find the same skin again
+      if (lk.lost > (Hm ? 60 : 120)) { T.dropLock(); } else { if (Hm && lk.lost > 20 && FLOW.sane(lk, Hm)) T.last = { G: warp(Hm), F: lk.F }; return T.last; } }
     const base = G ? { G, F: Fa } : (T.last && !SPOTS[T.spot].need ? T.last : null); if (!base) { T.steady = 0; return null; }
     if (!T.drag && ++T.steady > 5) { const g2 = new Float32Array(base.G.length); for (let k = 0; k < g2.length; k++) g2[k] = base.G[k] * s; const L2 = FLOW.start(g2);
-      if (L2) { L2.F = base.F.slice(); T.lock = L2; T.noLock = 0; } else T.noLock = (T.noLock || 0) + 1; }
+      if (L2) { L2.F = base.F.slice(); L2.s = s; T.lock = L2; T.noLock = 0; const kc = GL.keyCv, fc = GL.frameCv; if (kc.width !== fc.width || kc.height !== fc.height) { kc.width = fc.width; kc.height = fc.height; GL.ktex.dispose(); } kc.getContext('2d').drawImage(fc, 0, 0); GL.ktex.needsUpdate = true; L2.keyW = fc.width; } else T.noLock = (T.noLock || 0) + 1; }
     T.last = base; return base; },
-  dropLock() { const lk = T.lock; T.lock = null; T.steady = 0;
+  // details that sit on a hand in front of the tattoo belong to that hand, not your skin: never follow them
+  occRej(s) { const hs = T.occHands; if (!hs || !hs.length) return null; const segs = [], polys = [];
+    for (const p of hs) { const wd = Math.hypot(p[5][0] - p[17][0], p[5][1] - p[17][1]) * s; polys.push([0, 1, 2, 5, 9, 13, 17].map(i => [p[i][0] * s, p[i][1] * s]));
+      for (const ch of [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]]) for (let i = 0; i < 3; i++) segs.push([p[ch[i]][0] * s, p[ch[i]][1] * s, p[ch[i + 1]][0] * s, p[ch[i + 1]][1] * s, wd * 0.25]); }
+    const inPoly = (P, x, y) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) if ((P[i][1] > y) !== (P[j][1] > y) && x < (P[j][0] - P[i][0]) * (y - P[i][1]) / (P[j][1] - P[i][1]) + P[i][0]) c = !c; return c; };
+    return (x, y) => polys.some(P => inPoly(P, x, y)) || segs.some(([x1, y1, x2, y2, r]) => { const dx = x2 - x1, dy = y2 - y1, t = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy || 1))); return Math.hypot(x - x1 - t * dx, y - y1 - t * dy) < r; }); },
+  /* roto: for each small cell of the tattoo, compare the skin texture now with the texture at lock time (normalised cross-correlation).
+     Your own skin keeps its pattern even when the light changes; a finger, the other hand or an object does not. */
+  rotoMask(lk) { const MW = 48, MH = 24, NC = MW * MH, r = 4, n = (2 * r + 1) ** 2, Q = FLOW.cur.L[0], C = GL.C, R2 = GL.R, G0 = lk.G0, Hh = lk.H;
+    // every cell keeps its own picture of your skin: it starts from the lock moment and slowly follows light changes while the cell is clearly visible
+    if (!lk.rref) { lk.rref = new Float32Array(NC * n); lk.rhid = new Uint16Array(NC); lk.rinit = 0; lk.rpos = new Float32Array(NC * 2);
+      const at = (u, v) => { const x = u * C, y = v * R2, i = Math.min(C - 1, x | 0), j = Math.min(R2 - 1, y | 0), fx = x - i, fy = y - j, k = (a, b) => (b * (C + 1) + a) * 2;
+        const P = (a, b, o) => G0[k(a, b) + o]; return [0, 1].map(o => (P(i, j, o) * (1 - fx) + P(i + 1, j, o) * fx) * (1 - fy) + (P(i, j + 1, o) * (1 - fx) + P(i + 1, j + 1, o) * fx) * fy); };
+      for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) { const kp = at((x + 0.5) / MW, (y + 0.5) / MH), c = y * MW + x; lk.rpos[c * 2] = kp[0]; lk.rpos[c * 2 + 1] = kp[1]; } }
+    if (!lk.rref1) lk.rref1 = new Float32Array(NC * n);
+    const m = new Uint8Array(NC), cA = new Float32Array(n), cB = new Float32Array(n), first = !lk.rinit, Q1 = FLOW.cur.L[1];
+    for (let c = 0; c < NC; c++) { const kx = lk.rpos[c * 2], ky = lk.rpos[c * 2 + 1], cp = FLOW.ap(Hh, kx, ky), J1 = FLOW.ap(Hh, kx + 1, ky), J2 = FLOW.ap(Hh, kx, ky + 1), ax = J1[0] - cp[0], ay = J1[1] - cp[1], bx = J2[0] - cp[0], by = J2[1] - cp[1];
+     let occM = 0;
+     // two sizes: fine skin pores, and the bigger shapes (veins, knuckles, edges) that another hand of the same colour does not share
+     for (let lv = 0; lv < 2; lv++) { const cur = lv ? cB : cA, ref = lv ? lk.rref1 : lk.rref, QL = lv ? Q1 : Q, sc = lv ? 0.5 : 1, X0 = cp[0] * sc, Y0 = cp[1] * sc;
+      let k = 0, sb = 0; for (let j = -r; j <= r; j++) for (let i = -r; i <= r; i++, k++) { cur[k] = FLOW.bil(QL, X0 + ax * i + bx * j, Y0 + ay * i + by * j); sb += cur[k]; }
+      const o = c * n; if (first) { ref.set(cur, o); continue; }
+      let sa = 0; for (k = 0; k < n; k++) sa += ref[o + k]; sa /= n; sb /= n; let va = 0, vb = 0, cv2 = 0; for (k = 0; k < n; k++) { const da = ref[o + k] - sa, db = cur[k] - sb; va += da * da; vb += db * db; cv2 += da * db; } va /= n; vb /= n; cv2 /= n;
+      const dm = Math.abs(sb - sa) / (sa + 10); let occ;
+      if (va < 6 && vb < 6) occ = dm > 0.12 ? 1 : 0;   // both smooth: only a clear brightness change counts
+      else { const ncc = cv2 / Math.sqrt((va + 3) * (vb + 3)); occ = Math.min(1, Math.max(0, (0.6 - ncc) / 0.3)); if (dm > 0.22) occ = 1; }
+      if (lv && occ > 0.5 && va < 12 && vb < 12) occ *= 0.5;   // the bigger view of very plain skin says little
+      occM = Math.max(occM, occ); }
+     if (first) continue; const rf0 = lk.rref, rf1 = lk.rref1, o = c * n, c0 = cA, c1 = cB;
+     if (occM < 0.25) { lk.rhid[c] = 0; for (let k = 0; k < n; k++) { rf0[o + k] = rf0[o + k] * 0.92 + c0[k] * 0.08; rf1[o + k] = rf1[o + k] * 0.92 + c1[k] * 0.08; } }
+     else if (++lk.rhid[c] > 150 && (lk.rcf || 0) < 0.15) { rf0.set(c0, o); rf1.set(c1, o); lk.rhid[c] = 0; occM = 0; }   // something has sat still on the skin for seconds: it is part of the skin now (a ring, a plaster)
+     m[c] = occM * 255; }
+    if (first) { lk.rinit = 1; return; }
+    { let t2 = 0; for (let i = 0; i < NC; i++) t2 += m[i] > 127 ? 1 : 0; lk.rcf = t2 / NC; }
+    // tidy the mask: lone specks go, holes inside a covered area fill, then soften the edge a little
+    const o2 = new Uint8Array(NC); for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) { let s2 = 0, cnt = 0; for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) { const X = x + i, Y = y + j; if (X < 0 || Y < 0 || X >= MW || Y >= MH) continue; s2 += m[Y * MW + X] > 127 ? 1 : 0; cnt++; }
+      const v = m[y * MW + x], f = s2 / cnt; o2[y * MW + x] = f > 0.6 ? Math.max(v, 230) : f > 0.3 ? Math.max(v, 170) : f < 0.12 ? Math.min(v, 40) : v; }
+    const prev = T.rmPrev && T.rmPrev.length === NC ? T.rmPrev : null; for (let i = 0; i < NC; i++) if (prev) o2[i] = Math.max(o2[i], prev[i] * 0.5) | 0;   // fast to cover, quick to uncover
+    T.rmPrev = o2; if (GL.rtex.image.width !== MW) { GL.rtex.dispose(); GL.rtex = new THREE.DataTexture(new Uint8Array(NC * 4), MW, MH, THREE.RGBAFormat); GL.rtex.minFilter = GL.rtex.magFilter = THREE.LinearFilter; GL.ink.material.uniforms.rmask.value = GL.rtex; }
+    const d = GL.rtex.image.data; for (let i = 0; i < NC; i++) { const yy = MH - 1 - ((i / MW) | 0), xx = i % MW; d[(yy * MW + xx) * 4] = o2[i]; } GL.rtex.needsUpdate = true; GL.ink.material.uniforms.useR.value = 1; },
+  // skin details under a covered part of the tattoo belong to whatever is in front: never follow them
+  rotoRej(lk) { const m = T.rmPrev; if (!m || !lk.rpos || !lk.rinit) return null; const B = 8, Q = FLOW.cur, bw = Math.ceil(Q.w / B), bh = Math.ceil(Q.h / B), g = new Uint8Array(bw * bh); let any = 0;
+    for (let c = 0; c < m.length; c++) if (m[c] > 100) { const q = FLOW.ap(lk.H, lk.rpos[c * 2], lk.rpos[c * 2 + 1]), X = (q[0] / B) | 0, Y = (q[1] / B) | 0; for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) { const x = X + i, y = Y + j; if (x >= 0 && y >= 0 && x < bw && y < bh) g[y * bw + x] = 1; } any = 1; }
+    return any ? (x, y) => { const X = (x / B) | 0, Y = (y / B) | 0; return X >= 0 && Y >= 0 && X < bw && Y < bh && g[Y * bw + X] === 1; } : null; },
+  /* hands in front of the tattoo: a soft silhouette (palm and fingers) the ink is cut by */
+  drawOcc(W, H) { const c = GL.occCv, k = 0.25, w = Math.round(W * k), h = Math.round(H * k); if (c.width !== w || c.height !== h) { c.width = w; c.height = h; GL.otex.dispose(); }
+    const x = c.getContext('2d'); x.clearRect(0, 0, w, h); const hands = T.lock && T.roto !== false ? T.occHands || [] : []; GL.ink.material.uniforms.useHand.value = hands.length ? 1 : 0; if (!hands.length) return;
+    x.fillStyle = x.strokeStyle = '#fff'; x.lineCap = x.lineJoin = 'round'; x.filter = 'blur(1px)';
+    for (const p of hands) { const P = i => [p[i][0] * k, p[i][1] * k], wd = Math.hypot(p[5][0] - p[17][0], p[5][1] - p[17][1]) * k;
+      x.beginPath(); for (const [i, j] of [[0, 1], [1, 2], [2, 5], [5, 9], [9, 13], [13, 17], [17, 0]].map(([a]) => [a])) { const q = P(i); if (i === 0) x.moveTo(q[0], q[1]); else x.lineTo(q[0], q[1]); } x.closePath(); x.fill(); x.lineWidth = wd * 0.3; x.stroke();
+      for (const ch of [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]]) { x.lineWidth = wd * (ch[0] === 1 ? 0.34 : 0.27); x.beginPath(); ch.forEach((i, n) => { const q = P(i); if (n) x.lineTo(q[0], q[1]); else x.moveTo(q[0], q[1]); }); x.stroke(); } }
+    x.filter = 'none'; GL.otex.needsUpdate = true; },
+  dropLock() { const lk = T.lock; T.lock = null; T.steady = 0; T.rmPrev = null; if (GL.ink) GL.ink.material.uniforms.useR.value = 0;
     // with no body model ("Anywhere"), keep the tattoo where the skin last had it
     if (lk && !SPOTS[T.spot].need && T.last && T.lastWH) { const g = T.last.G, mid = (g.length / 2) & ~1, [W, H] = T.lastWH; T.off = { u: g[mid] / W - 0.5, v: g[mid + 1] / H - 0.5 }; } },
   /* touch: drag to move along or round the limb, pinch to resize, twist to turn */
