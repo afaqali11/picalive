@@ -102,7 +102,7 @@ try {
   const raw = p2 => `https://raw.githubusercontent.com/${repo}/${br}/${p2.split('/').map(encodeURIComponent).join('/')}`;
   const KN = '/tmp/kn'; fs.mkdirSync(KN, { recursive: true });
   const ref = glbs.find(f => /\/pot_large\.glb$/i.test(f.path)) || glbs.find(f => /\/plant_bushLarge\.glb$/i.test(f.path)); let k = 1;
-  if (ref) { const t = KN + '/ref.glb'; fs.writeFileSync(t, await get(raw(ref.path), 'buf')); const s = await size(t); k = (/pot_large/.test(ref.path) ? 0.55 : 1.0) / Math.max(s[0], s[1], s[2]); } console.log('nature scale', k);
+  if (ref) { const t = KN + '/ref.glb'; fs.writeFileSync(t, await get(raw(ref.path), 'buf')); const s = await size(t); k = (/pot_large/.test(ref.path) ? 1.0 : 1.8) / Math.max(s[0], s[1], s[2]); } console.log('nature scale', k);
   const KEEP = /^(plant_|flower_|pot_|cactus|lily_|mushroom_red|stump_round|log$|tree_(small|cone|default|oak|palm|plateau|simple|thin|fat|blocks)|fence_simple|fence_planks|bed$|crop_|tent_smallOpen|campfire_logs|sign$)/i;
   let n = 0;
   for (const f of glbs) { const base = path.basename(f.path, '.glb'); if (!KEEP.test(base) || /dark|fall|detailed_?$/i.test(base) && /tree/.test(base) || n >= 80) continue; const id = 'kn_' + base;
