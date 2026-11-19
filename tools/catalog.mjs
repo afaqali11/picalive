@@ -92,6 +92,28 @@ try {
       const pv = pngs.find(q => path.basename(q.path, '.png').toLowerCase() === base.toLowerCase()); if (pv) fs.writeFileSync(path.join(OUT, 't', id + '.png'), await get(raw(pv.path), 'buf')); n++;
     } catch (e) { console.log('fail', id, e.message.slice(0, 160)); } }
 } catch (e) { console.log('food kit fail', e.message); }
+// 2c) Kenney Nature Kit (CC0): potted plants, flowers, small trees and garden pieces for balconies, villas and big rooms
+try {
+  const repo = 'BastiaanOlij/godot-vr-weapons', pre = 'assets/kenney.nl/naturekit/', H = { ...UA, Accept: 'application/vnd.github+json', ...(process.env.GITHUB_TOKEN ? { Authorization: 'Bearer ' + process.env.GITHUB_TOKEN } : {}) };
+  const info = await (await fetch('https://api.github.com/repos/' + repo, { headers: H })).json(), br = info.default_branch || 'master';
+  const tree = await (await fetch(`https://api.github.com/repos/${repo}/git/trees/${br}?recursive=1`, { headers: H })).json();
+  const all = (tree.tree || []).filter(f => f.type === 'blob' && f.path.startsWith(pre)), glbs = all.filter(f => /\.glb$/i.test(f.path));
+  console.log('nature kit glbs', glbs.length);
+  const raw = p2 => `https://raw.githubusercontent.com/${repo}/${br}/${p2.split('/').map(encodeURIComponent).join('/')}`;
+  const KN = '/tmp/kn'; fs.mkdirSync(KN, { recursive: true });
+  const ref = glbs.find(f => /\/pot_large\.glb$/i.test(f.path)) || glbs.find(f => /\/plant_bushLarge\.glb$/i.test(f.path)); let k = 1;
+  if (ref) { const t = KN + '/ref.glb'; fs.writeFileSync(t, await get(raw(ref.path), 'buf')); const s = await size(t); k = (/pot_large/.test(ref.path) ? 0.55 : 1.0) / Math.max(s[0], s[1], s[2]); } console.log('nature scale', k);
+  const KEEP = /^(plant_|flower_|pot_|cactus|lily_|mushroom_red|stump_round|log$|tree_(small|cone|default|oak|palm|plateau|simple|thin|fat|blocks)|fence_simple|fence_planks|bed$|crop_|tent_smallOpen|campfire_logs|sign$)/i;
+  let n = 0;
+  for (const f of glbs) { const base = path.basename(f.path, '.glb'); if (!KEEP.test(base) || /dark|fall|detailed_?$/i.test(base) && /tree/.test(base) || n >= 80) continue; const id = 'kn_' + base;
+    try { const src = KN + '/' + id + '.glb'; fs.writeFileSync(src, await get(raw(f.path), 'buf')); const d = await io.read(src);
+      for (const nd of d.getRoot().listScenes()[0].listChildren()) { const s2 = nd.getScale(), t = nd.getTranslation(); nd.setScale([s2[0] * k, s2[1] * k, s2[2] * k]); nd.setTranslation([t[0] * k, t[1] * k, t[2] * k]); }
+      const out2 = KN + '/' + id + '_s.glb'; await io.write(out2, d);
+      const nice = base.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, c => c.toUpperCase());
+      await build(id, [[id + '.glb', fs.readFileSync(out2)]], 'Kenney Nature Kit (CC0)', { name: nice, cats: ['garden'], tags: ['garden', 'outdoor', /plant|flower|pot|cactus|lily|tree/i.test(base) ? 'plant' : 'outdoor'], style: 'simple' }); n++;
+    } catch (e) { console.log('fail', id, e.message.slice(0, 160)); } }
+  console.log('nature kit added', n);
+} catch (e) { console.log('nature kit fail', e.message); }
 // 3) Khronos samples (CC BY 4.0)
 const KH = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
 for (const [id, name, cats] of [['GlamVelvetSofa', 'Glam Velvet Sofa', ['furniture', 'seating']], ['SheenChair', 'Fabric Chair', ['furniture', 'seating']], ['SheenWoodLeatherSofa', 'Wood and Leather Sofa', ['furniture', 'seating']],
