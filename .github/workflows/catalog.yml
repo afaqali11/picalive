@@ -16,6 +16,8 @@ jobs:
         with: { node-version: 20 }
       - run: npm i --no-save @gltf-transform/core@4.1.1 @gltf-transform/extensions@4.1.1 meshoptimizer@0.22.0
       - run: node tools/catalog.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Commit catalog to main and gh-pages
         run: |
           git config user.name "picalive-bot"; git config user.email "actions@users.noreply.github.com"
