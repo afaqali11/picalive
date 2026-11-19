@@ -40,8 +40,9 @@ for (const [id, a] of Object.entries(ph)) {
 }
 // 2) Kenney Furniture Kit (CC0): kitchens, bathrooms, beds, doors, windows in a clean simple style
 try {
-  const page = await get('https://kenney.nl/assets/furniture-kit', 'text'), m = page.match(/https:\/\/kenney\.nl\/media\/pages\/assets\/furniture-kit\/[^"']+\.zip/);
-  if (!m) throw new Error('zip link not found');
+  const page = await get('https://kenney.nl/assets/furniture-kit', 'text'), m0 = page.match(/(?:https:\/\/kenney\.nl)?\/?media\/pages\/assets\/furniture-kit\/[^"'\s>]+?\.zip/) || page.match(/[^"'\s>]+furniture[^"'\s>]*\.zip/i);
+  if (!m0) { const i = page.toLowerCase().indexOf('.zip'); console.log('kenney page', page.length, i, page.slice(Math.max(0, i - 300), i + 50).replace(/\s+/g, ' ')); throw new Error('zip link not found'); }
+  const m = [new URL(m0[0], 'https://kenney.nl/').href]; console.log('kenney zip', m[0]);
   const zf = '/tmp/kenney.zip', kd = '/tmp/kenney'; fs.writeFileSync(zf, await get(m[0], 'buf')); fs.rmSync(kd, { recursive: true, force: true }); execFileSync('unzip', ['-q', zf, '-d', kd]);
   const all = execFileSync('find', [kd, '-type', 'f']).toString().trim().split('\n');
   const glbs = all.filter(f => /\.glb$/i.test(f)), pngs = all.filter(f => /\.png$/i.test(f));
