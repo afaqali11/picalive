@@ -5,24 +5,23 @@ import fs from 'fs'; import path from 'path'; import { execFileSync } from 'chil
 const OUT = 'catalog', TMP = '/tmp/cat'; fs.mkdirSync(OUT + '/m', { recursive: true }); fs.mkdirSync(OUT + '/t', { recursive: true });
 const UA = { 'User-Agent': 'PicAliveRoom-catalog/1.0 (github.com/afaqali11/picalive)' };
 const get = async (u, t = 'json') => { for (let i = 0; i < 4; i++) { try { const r = await fetch(u, { headers: UA }); if (!r.ok) throw new Error(r.status + ' ' + u); return t === 'json' ? r.json() : Buffer.from(await r.arrayBuffer()); } catch (e) { if (i === 3) throw e; await new Promise(r => setTimeout(r, 1500 * (i + 1))); } } };
-const gt = (...a) => execFileSync('npx', ['--yes', '@gltf-transform/cli@4.1.1', ...a], { stdio: 'inherit' });
-const KEEP = /furniture|seating|chair|sofa|table|bed|shelv|storage|cabinet|decor|lamp|light|plant|vase|mirror|rug|clock|pot|basket|book|curtain/i;
-const SKIP = /props\/industrial|weapon|food|tool|vehicle|scaffold|barrel|street|rock|tree_stump|debris/i;
-const MAXMB = 6, out = [];
+const gt = (...a) => execFileSync('npx', ['--yes', '@gltf-transform/cli@4.1.1', ...a], { stdio: ['ignore', 'ignore', 'inherit'] });
+const keep = c => c.includes('furniture') || c.includes('potted plants') || c.includes('vases') || c.includes('wall decoration') || (c.includes('lighting') && c.includes('decorative'));
+const skip = c => c.includes('rigged') || c.includes('weapons') || c.includes('food');
+const MAXMB = 7, out = []; let total = 0;
 async function build(id, files, src, meta) {
   const dir = path.join(TMP, id); fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
   for (const [rel, url] of files) { const f = path.join(dir, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, await get(url, 'buf')); }
   const main = path.join(dir, files[0][0]), glb = path.join(OUT, 'm', id + '.glb');
-  gt('optimize', main, glb, '--compress', 'meshopt', '--texture-compress', 'jpeg', '--texture-size', '1024', '--simplify-error', '0.0005');
+  gt('optimize', main, glb, '--compress', 'meshopt', '--texture-compress', 'false', '--texture-size', '1024', '--simplify-error', '0.0005');
   const mb = fs.statSync(glb).size / 1e6; if (mb > MAXMB) { console.log('too big', id, mb); fs.rmSync(glb); return; }
-  out.push({ id, ...meta, src, mb: +mb.toFixed(2) }); console.log('ok', id, mb.toFixed(2), 'MB');
+  total += mb; out.push({ id, ...meta, src, mb: +mb.toFixed(2) }); console.log('ok', id, mb.toFixed(2), 'MB');
 }
 const ph = await get('https://api.polyhaven.com/assets?t=models');
 const cats = {}; for (const a of Object.values(ph)) for (const c of a.categories || []) cats[c] = (cats[c] || 0) + 1;
 console.log('categories', JSON.stringify(cats));
 for (const [id, a] of Object.entries(ph)) {
-  const cs = (a.categories || []).join('/') + ' ' + (a.tags || []).join(' ');
-  if (!KEEP.test(cs) || SKIP.test(cs)) continue;
+  const c = a.categories || []; if (!keep(c) || skip(c) || total > 320) continue;
   try {
     const f = await get('https://api.polyhaven.com/files/' + id), g = f.gltf && f.gltf['1k'] && f.gltf['1k'].gltf; if (!g) continue;
     const files = [[path.basename(new URL(g.url).pathname), g.url], ...Object.entries(g.include || {}).map(([rel, v]) => [rel, v.url])];
