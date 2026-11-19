@@ -13232,7 +13232,79 @@ const SPOTS = {
   wrist: { name: 'Wrist', need: 'hand', len: 0.55, tip: 'Show your hand and wrist, fingers open' },
   hand: { name: 'Back of hand', need: 'hand', len: 0.68, tip: 'Show the back of your hand, fingers open' },
   finger: { name: 'Finger', need: 'hand', len: 0.62, tip: 'Show your hand, index finger straight' },
-  free: { name: 'Anywhere', need: null, len: 1, tip: 'Drag, pinch and twist to place it' } };
+  free: { name: 'Anywhere', need: null, len: 1, tip: 'Place it, then hold still: it locks to your skin' } };
+
+
+/* ───────────── skin lock: follow the real skin details (creases, veins, pores, a pen mark) frame to frame ─────────────
+   Pyramidal Lucas-Kanade optical flow on a 480 px grey copy of each camera frame, then a robust (RANSAC) perspective fit
+   from where each detail was when the tattoo was locked to where it is now. The tattoo moves with those pixels. */
+const FLOW = {
+  frame(fc) { const s = 480 / Math.max(fc.width, fc.height), w = Math.round(fc.width * s), h = Math.round(fc.height * s);
+    const c = FLOW.cv || (FLOW.cv = cv(w, h)); if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(fc, 0, 0, w, h);
+    const d = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h); for (let i = 0, n = w * h; i < n; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    const L = [{ d: g, w, h }]; for (let l = 1; l < 4; l++) { const p = L[l - 1], W2 = p.w >> 1, H2 = p.h >> 1, q = new Float32Array(W2 * H2);
+      for (let y = 0; y < H2; y++) for (let X = 0; X < W2; X++) { const i = 2 * y * p.w + 2 * X; q[y * W2 + X] = (p.d[i] + p.d[i + 1] + p.d[i + p.w] + p.d[i + p.w + 1]) * 0.25; } L.push({ d: q, w: W2, h: H2 }); }
+    FLOW.prev = FLOW.cur; FLOW.cur = { L, s, w, h }; return FLOW.cur; },
+  bil(l, x, y) { const w = l.w, h = l.h; if (x < 0) x = 0; else if (x > w - 1.001) x = w - 1.001; if (y < 0) y = 0; else if (y > h - 1.001) y = h - 1.001;
+    const X = x | 0, Y = y | 0, fx = x - X, fy = y - Y, i = Y * w + X, d = l.d; return (d[i] * (1 - fx) + d[i + 1] * fx) * (1 - fy) + (d[i + w] * (1 - fx) + d[i + w + 1] * fx) * fy; },
+  // one point from pyramid P to pyramid Q; returns [x, y] or null
+  lk(P, Q, x, y, px0 = 0, py0 = 0) { const R = 5, n = (2 * R + 1) ** 2, I = new Float32Array(n), Ix = new Float32Array(n), Iy = new Float32Array(n), top = P.length - 1; let gx = px0 / (1 << top), gy = py0 / (1 << top);
+    for (let l = top; l >= 0; l--) { const sc = 1 / (1 << l), px = x * sc, py = y * sc, a = P[l], b = Q[l]; let k = 0, A = 0, B = 0, Cc = 0;
+      for (let j = -R; j <= R; j++) for (let i = -R; i <= R; i++, k++) { const u = px + i, v = py + j; I[k] = FLOW.bil(a, u, v); const dx = (FLOW.bil(a, u + 1, v) - FLOW.bil(a, u - 1, v)) * 0.5, dy = (FLOW.bil(a, u, v + 1) - FLOW.bil(a, u, v - 1)) * 0.5; Ix[k] = dx; Iy[k] = dy; A += dx * dx; B += dx * dy; Cc += dy * dy; }
+      const det = A * Cc - B * B; if (det < 1e-3 || (A + Cc) / 2 - Math.sqrt(((A - Cc) / 2) ** 2 + B * B) < n * 0.4) return null;
+      let vx = 0, vy = 0; for (let it = 0; it < 8; it++) { let bx = 0, by = 0; k = 0; for (let j = -R; j <= R; j++) for (let i = -R; i <= R; i++, k++) { const e = I[k] - FLOW.bil(b, px + i + gx + vx, py + j + gy + vy); bx += e * Ix[k]; by += e * Iy[k]; }
+        const dvx = (Cc * bx - B * by) / det, dvy = (A * by - B * bx) / det; vx += dvx; vy += dvy; if (dvx * dvx + dvy * dvy < 1e-4) break; }
+      if (l) { gx = 2 * (gx + vx); gy = 2 * (gy + vy); } else { gx += vx; gy += vy; } }
+    const nx = x + gx, ny = y + gy, l0 = Q[0]; return nx < 2 || ny < 2 || nx > l0.w - 3 || ny > l0.h - 3 ? null : [nx, ny]; },
+  // good details to follow (Shi-Tomasi corners) inside a convex quad
+  corners(quad, max, avoid) { const l = FLOW.cur.L[0], w = l.w, h = l.h, d = l.d; let x0 = w, y0 = h, x1 = 0, y1 = 0; for (const q of quad) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+    x0 = Math.max(3, x0 | 0); y0 = Math.max(3, y0 | 0); x1 = Math.min(w - 4, x1 | 0); y1 = Math.min(h - 4, y1 | 0); if (x1 - x0 < 8 || y1 - y0 < 8) return [];
+    const inQ = (x, y) => { let sg = 0; for (let i = 0; i < 4; i++) { const a = quad[i], b = quad[(i + 1) % 4], c = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]); if (c !== 0) { if (sg && Math.sign(c) !== sg) return false; sg = Math.sign(c); } } return true; };
+    const cell = 7, out = [];
+    for (let cy = y0; cy < y1; cy += cell) for (let cx = x0; cx < x1; cx += cell) { let best = 0, bx = 0, by = 0;
+      for (let y = cy; y < Math.min(cy + cell, y1); y += 1) for (let x = cx; x < Math.min(cx + cell, x1); x += 1) { let A = 0, B = 0, Cc = 0;
+        for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) { const k = (y + j) * w + x + i, dx = (d[k + 1] - d[k - 1]) * 0.5, dy = (d[k + w] - d[k - w]) * 0.5; A += dx * dx; B += dx * dy; Cc += dy * dy; }
+        const e = (A + Cc) / 2 - Math.sqrt(((A - Cc) / 2) ** 2 + B * B); if (e > best) { best = e; bx = x; by = y; } }
+      if (best > 60 && inQ(bx, by) && !(avoid && avoid.some(p => Math.abs(p[0] - bx) < 5 && Math.abs(p[1] - by) < 5))) out.push([bx, by, best]); }
+    return out.sort((a, b) => b[2] - a[2]).slice(0, max).map(p => [p[0], p[1]]); },
+  // perspective fit (least squares) src → dst; returns 3x3 as array
+  fitH(src, dst) { const n = src.length; if (n < 4) return null; const A = Array.from({ length: 8 }, () => new Float64Array(9));
+    const mx = src.reduce((a, p) => a + p[0], 0) / n, my = src.reduce((a, p) => a + p[1], 0) / n, Mx = dst.reduce((a, p) => a + p[0], 0) / n, My = dst.reduce((a, p) => a + p[1], 0) / n;
+    const ss = n / (src.reduce((a, p) => a + Math.hypot(p[0] - mx, p[1] - my), 0) || 1), sd = n / (dst.reduce((a, p) => a + Math.hypot(p[0] - Mx, p[1] - My), 0) || 1);
+    for (let i = 0; i < n; i++) { const x = (src[i][0] - mx) * ss, y = (src[i][1] - my) * ss, X = (dst[i][0] - Mx) * sd, Y = (dst[i][1] - My) * sd;
+      for (const [r, t] of [[[x, y, 1, 0, 0, 0, -x * X, -y * X], X], [[0, 0, 0, x, y, 1, -x * Y, -y * Y], Y]]) for (let j = 0; j < 8; j++) { for (let k = 0; k < 8; k++) A[j][k] += r[j] * r[k]; A[j][8] += r[j] * t; } }
+    for (let c = 0; c < 8; c++) { let pv = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[pv][c])) pv = r; [A[c], A[pv]] = [A[pv], A[c]]; const dd = A[c][c]; if (Math.abs(dd) < 1e-10) return null;
+      for (let r = 0; r < 8; r++) if (r !== c) { const f = A[r][c] / dd; for (let k = c; k < 9; k++) A[r][k] -= f * A[c][k]; } }
+    const h = A.map((r, i) => r[8] / r[i]); h.push(1);
+    // undo the normalisation: H = Tdst^-1 · Hn · Tsrc
+    const Ts = [ss, 0, -ss * mx, 0, ss, -ss * my, 0, 0, 1], Td = [1 / sd, 0, Mx, 0, 1 / sd, My, 0, 0, 1]; return FLOW.mul(Td, FLOW.mul(h, Ts)); },
+  mul(a, b) { const r = new Array(9); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j]; return r; },
+  ap(H, x, y) { const w = H[6] * x + H[7] * y + H[8]; return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w]; },
+  inv(m) { const [a, b, c, d, e, f, g, h, i] = m, A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C; if (Math.abs(det) < 1e-12) return null;
+    return [A / det, -(b * i - c * h) / det, (b * f - c * e) / det, B / det, (a * i - c * g) / det, -(a * f - c * d) / det, C / det, -(a * h - b * g) / det, (a * e - b * d) / det]; },
+  // RANSAC: keep the details that move together (skin), drop the ones that don't (background, sleeves)
+  robust(src, dst) { const n = src.length; if (n < 6) return null; let best = null, bestIn = [];
+    for (let it = 0; it < 60; it++) { const pick = new Set(); while (pick.size < 4) pick.add((Math.random() * n) | 0); const ids = [...pick], H = FLOW.fitH(ids.map(i => src[i]), ids.map(i => dst[i])); if (!H) continue;
+      const inl = []; for (let i = 0; i < n; i++) { const q = FLOW.ap(H, src[i][0], src[i][1]); if (Math.hypot(q[0] - dst[i][0], q[1] - dst[i][1]) < 2.5) inl.push(i); } if (inl.length > bestIn.length) { bestIn = inl; best = H; } if (inl.length > n * 0.85) break; }
+    if (bestIn.length < Math.max(6, n * 0.35)) return null; const H = FLOW.fitH(bestIn.map(i => src[i]), bestIn.map(i => dst[i])) || best; return { H, inl: bestIn }; },
+  quadOf(G, grow) { const C = GL.C, R2 = GL.R, ids = [0, C, (C + 1) * R2 + C, (C + 1) * R2], q = ids.map(k => [G[k * 2], G[k * 2 + 1]]), cx = q.reduce((a, p) => a + p[0], 0) / 4, cy = q.reduce((a, p) => a + p[1], 0) / 4;
+    return q.map(p => [cx + (p[0] - cx) * grow, cy + (p[1] - cy) * grow]); },
+  start(G) { const pts = FLOW.corners(FLOW.quadOf(G, 1.15), 70); if (pts.length < 12) return null; return { G0: G.slice(), a: pts.map(p => p.slice()), p: pts, H: [1, 0, 0, 0, 1, 0, 0, 0, 1], bad: 0, age: 0, K: FLOW.cur.L }; },
+  step(lk) { const P = FLOW.prev, Q = FLOW.cur; if (!P || P.w !== Q.w || P.h !== Q.h) return false; const a = [], p = [];
+    const vx = lk.vx || 0, vy = lk.vy || 0;
+    for (let i = 0; i < lk.p.length; i++) { let f = FLOW.lk(P.L, Q.L, lk.p[i][0], lk.p[i][1], vx, vy); if (!f && (vx || vy)) f = FLOW.lk(P.L, Q.L, lk.p[i][0], lk.p[i][1]); if (!f) continue; const bk = FLOW.lk(Q.L, P.L, f[0], f[1], -(f[0] - lk.p[i][0]), -(f[1] - lk.p[i][1])); if (!bk || Math.hypot(bk[0] - lk.p[i][0], bk[1] - lk.p[i][1]) > 0.8) continue; a.push(lk.a[i]); p.push(f); }
+    const fit = FLOW.robust(a, p); if (!fit) return false;
+    // reject impossible jumps (a flipped or collapsed shape)
+    const q0 = FLOW.quadOf(lk.G0, 1).map(c => FLOW.ap(fit.H, c[0], c[1])); let area = 0; for (let i = 0; i < 4; i++) { const u = q0[i], v = q0[(i + 1) % 4]; area += u[0] * v[1] - v[0] * u[1]; }
+    const q1 = FLOW.quadOf(lk.G0, 1); let a0 = 0; for (let i = 0; i < 4; i++) { const u = q1[i], v = q1[(i + 1) % 4]; a0 += u[0] * v[1] - v[0] * u[1]; } const ratio = area / a0; if (!(ratio > 0.25 && ratio < 4)) return false;
+    // snap back to the look of the skin when it was locked (the key frame): stops slow drift, and fixes a bad jump
+    if (lk.K) { const a2 = [], q2 = []; let good = 0; for (const i of fit.inl) { const pr = FLOW.ap(fit.H, a[i][0], a[i][1]), q = FLOW.lk(lk.K, Q.L, a[i][0], a[i][1], pr[0] - a[i][0], pr[1] - a[i][1]); if (q && Math.hypot(q[0] - pr[0], q[1] - pr[1]) < 6) { a2.push(a[i]); q2.push(q); good++; } }
+      if (good >= Math.max(10, fit.inl.length * 0.5)) { const f2 = FLOW.robust(a2, q2); if (f2) { fit.H = f2.H; } } else if (good < fit.inl.length * 0.25) lk.rekey = (lk.rekey || 0) + 1; }
+    { const mid = FLOW.quadOf(lk.G0, 1).reduce((m, c) => [m[0] + c[0] / 4, m[1] + c[1] / 4], [0, 0]), c0 = FLOW.ap(lk.H, mid[0], mid[1]), c1 = FLOW.ap(fit.H, mid[0], mid[1]); lk.vx = c1[0] - c0[0]; lk.vy = c1[1] - c0[1]; }
+    lk.H = fit.H; lk.a = fit.inl.map(i => a[i]); lk.p = fit.inl.map(i => p[i]); lk.age++;
+    if (lk.p.length < 45) { const Hi = FLOW.inv(lk.H); if (Hi) for (const q of FLOW.corners(FLOW.quadOf(lk.G0.map((v, i) => v), 1.15).map(c => FLOW.ap(lk.H, c[0], c[1])), 70 - lk.p.length, lk.p)) { lk.p.push(q); lk.a.push(FLOW.ap(Hi, q[0], q[1])); } }
+    return true; }
+};
 
 /* ───────────── GPU drawing: camera picture and ink drawn together, from the same frame ───────────── */
 const { THREE } = window.AREngine;
@@ -13271,7 +13343,7 @@ const T = {
     const spots = T.spotsEl = el('div', { class: 'tt-chips' }, ...Object.entries(SPOTS).map(([k, s]) => el('button', { class: k === T.spot ? 'on' : '', onclick: () => T.setSpot(k) }, s.name)));
     const designs = T.designs = el('div', { class: 'tt-designs' });
     const sl = (lab, min, max, val, fn) => el('label', null, el('span', null, lab), el('input', { type: 'range', min, max, step: 1, value: val, oninput: e => fn(+e.target.value) }));
-    T.sizeIn = sl('Size', 30, 250, 100, v => T.scale = v / 100); T.rotIn = sl('Turn', -180, 180, 0, v => T.rot = v * Math.PI / 180);
+    T.sizeIn = sl('Size', 30, 250, 100, v => { T.scale = v / 100; T.dropLock(); }); T.rotIn = sl('Turn', -180, 180, 0, v => { T.rot = v * Math.PI / 180; T.dropLock(); });
     const opts = el('div', { class: 'tt-opts' }, T.sizeIn, T.rotIn, sl('Ink', 30, 100, 90, v => T.opacity = v / 100),
       el('div', { class: 'tt-tog' }, el('button', { class: 'on', onclick: e => { T.healed = false; e.currentTarget.classList.add('on'); e.currentTarget.nextSibling.classList.remove('on'); } }, 'Fresh'), el('button', { onclick: e => { T.healed = true; e.currentTarget.classList.add('on'); e.currentTarget.previousSibling.classList.remove('on'); } }, 'Healed')));
     const shot = el('button', { class: 'tt-shot', 'aria-label': 'Take a photo', onclick: T.capture });
@@ -13283,7 +13355,7 @@ const T = {
     T.setSpot(T.spot);
   },
   say(t, ok) { if (T.status.textContent !== t) T.status.textContent = t; T.status.classList.toggle('ok', !!ok); },
-  async setSpot(k) { T.spot = k; T.off = { u: 0, v: 0 }; T.geo = null; T.raw = null; T.F = {}; for (const b of T.spotsEl.children) b.classList.toggle('on', b.textContent === SPOTS[k].name);
+  async setSpot(k) { T.dropLock(); T.last = null; T.spot = k; T.off = { u: 0, v: 0 }; T.geo = null; T.raw = null; T.F = {}; for (const b of T.spotsEl.children) b.classList.toggle('on', b.textContent === SPOTS[k].name);
     const need = SPOTS[k].need; if (!need) { T.ready = true; return; } T.ready = false; T.say('Loading ' + (need === 'pose' ? 'arm' : 'hand') + ' tracking (first time only)...');
     try { await loadAI(need, T.still ? 'IMAGE' : 'VIDEO'); T.ready = true; if (T.still) T.detectStill(); } catch (e) { T.say('Tracking could not start here. Drag the tattoo into place.'); T.spot = 'free'; T.ready = true; } },
   async startCam() { if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.still = null;
@@ -13296,7 +13368,7 @@ const T = {
   fillDesigns() { const D2 = T.designs; D2.textContent = '';
     D2.append(el('button', { class: 'tt-add', onclick: T.upload }, svg('M12 5v14M5 12h14'), el('span', null, 'My design')), el('button', { class: 'tt-add', onclick: T.text }, el('i', null, 'Aa'), el('span', null, 'Name or text')));
     for (const [k, [n, f]] of Object.entries(DESIGNS)) { const c = T['dz_' + k] || (T['dz_' + k] = f()); const b = el('button', { class: 'tt-d' + (T.dkey === k ? ' on' : ''), onclick: () => { T.setDesign(c, k); T.fillDesigns(); } }); const im = new Image(); im.src = c.toDataURL(); b.append(im, el('span', null, n)); D2.append(b); } },
-  setDesign(c, key) { T.design = c; T.dkey = key; T.off = { u: 0, v: 0 }; if (GL.ink) GL.setDesign(c); },
+  setDesign(c, key) { const keep = T.lock && !SPOTS[T.spot].need; T.dropLock(); T.design = c; T.dkey = key; if (!keep) T.off = { u: 0, v: 0 }; if (GL.ink) GL.setDesign(c); },
   async upload() { const img = await pickPhoto(); if (!img) return; T.setDesign(toInk(img, T.colour), 'mine'); T.fillDesigns(); toast('White paper becomes see-through. Pinch to resize, twist to turn.', 3500); },
   async text() { const inp = el('input', { value: 'Forever', maxlength: 24, style: 'width:100%;margin-bottom:10px' }); let font = FONTS[0][1];
     const fonts = el('div', { class: 'rm-chips' }, ...FONTS.map(([n, f], i) => el('button', { class: i ? '' : 'on', style: `font-family:${f}`, onclick: e => { font = f; for (const b of fonts.children) b.classList.toggle('on', b === e.currentTarget); } }, n)));
@@ -13322,17 +13394,19 @@ const T = {
     const tick = () => { if (!T.L || my !== T.gen) return; next(); GL.size(); const src = T.still || (v.readyState >= 2 && v.videoWidth ? v : null); if (!src) { GL.r.render(GL.scene, GL.cam); return; }
       const W = src.videoWidth || src.width, H = src.videoHeight || src.height, fc = GL.frameCv; if (fc.width !== W || fc.height !== H) { fc.width = W; fc.height = H; GL.ftex.dispose(); }
       const x = fc.getContext('2d'); if (!T.still || !T._stillDrawn || T._stillDrawn !== T.still) { x.drawImage(src, 0, 0, W, H); GL.ftex.needsUpdate = true; T._stillDrawn = T.still; }
-      if (!T.still && T.ready && SPOTS[T.spot].need) { try { T.detect(fc, performance.now(), false); } catch (e) {} }
+      if (!T.still) { try { FLOW.frame(fc); } catch (e) {} }
+      // while the skin lock holds, the body model only needs to check in now and then (keeps the frame rate high)
+      T.fn = (T.fn || 0) + 1; if (!T.still && T.ready && SPOTS[T.spot].need && (!T.lock || T.fn % 4 === 0)) { try { T.detect(fc, performance.now(), false); } catch (e) {} }
       T.layout(W, H); GL.r.render(GL.scene, GL.cam);
-      if (!T.still && T.ready) { const sp = SPOTS[T.spot]; if (sp.need && !T.raw) T.say(sp.tip); else T.say('Locked on. Drag, pinch or twist to adjust.', true); } };
+      if (!T.still && T.ready) { const sp = SPOTS[T.spot]; if (T.lock) T.say('Locked to your skin. Drag, pinch or twist to adjust.', true); else if (sp.need && !T.raw) T.say(sp.tip); else if ((T.noLock || 0) > 40) T.say('Not enough skin detail here. Draw a small pen mark where the tattoo goes for a solid lock.'); else T.say('Hold still a moment to lock it to your skin'); } };
     next(); },
   /* where every point of the tattoo lands on screen */
   layout(W, H) { const M = mapper(W, H), bp = GL.bg.geometry.attributes.position, c4 = [[0, 0], [W, 0], [0, H], [W, H]];
     c4.forEach(([x, y], i) => { const [a, b] = M.to(x, y); bp.setXYZ(i, a, b, 0); }); bp.needsUpdate = true;
     const g = GL.ink.geometry, P = g.attributes.position, Fd = g.attributes.fade, C = GL.C, R2 = GL.R, d = T.design, ar = d.width / d.height, sp = SPOTS[T.spot], raw = T.raw, cr = Math.cos(T.rot), sr = Math.sin(T.rot);
     const um = GL.ink.material.uniforms; um.op.value = T.opacity; um.healed.value = T.healed ? 1 : 0; let put;
-    if (!sp.need || !raw) { if (sp.need && !raw && !T.still) { GL.ink.visible = false; return; } const s = Math.min(W, H) * 0.32 * T.scale, cx = W / 2 + T.off.u * W, cy = H / 2 + T.off.v * H, h = s, w = s * ar;
-      put = (u, v) => { const lx = (u - 0.5) * w, ly = (v - 0.5) * h; return [cx + lx * cr - ly * sr, cy + lx * sr + ly * cr, 1]; }; }
+    if (!sp.need || !raw) { if (sp.need && !raw && !T.still) { put = 'none'; } else { const s = Math.min(W, H) * 0.32 * T.scale, cx = W / 2 + T.off.u * W, cy = H / 2 + T.off.v * H, h = s, w = s * ar;
+      put = (u, v) => { const lx = (u - 0.5) * w, ly = (v - 0.5) * h; return [cx + lx * cr - ly * sr, cy + lx * sr + ly * cr, 1]; }; } }
     else if (T.spot === 'hand' && T.cam) { const w = T.world, cam = T.cam;
       // back of the hand as a gently curved surface in 3D, seen through the fitted camera: true tilt and perspective
       let n = V.norm(V.cross(V.sub(w[5], w[0]), V.sub(w[17], w[0]))); if (V.dot(n, cam.toCam) < 0) n = n.map(c => -c);
@@ -13373,13 +13447,32 @@ const T = {
       // ink lies on a cylinder round the limb: across-the-arm distance is an arc, seen from the front as R·sin(angle)
       put = (u, v) => { const lx = (u - 0.5) * w, ly = (v - 0.5) * h, ax = lx * cr - ly * sr, ay = lx * sr + ly * cr, th = (arc0 + ax) / Rr, al = along0 + ay;
         const f = Math.cos(th); return [A[0] + ux * al + nx * Rr * Math.sin(th), A[1] + uy * al + ny * Rr * Math.sin(th), f > 0 ? Math.pow(f, 0.6) : 0]; }; }
-    for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i, q = put(i / C, j / R2), s2 = M.to(q[0], q[1]); P.setXYZ(k, s2[0], s2[1], 0); Fd.setX(k, q[2]); }
+    // the model's placement (or none), then the skin lock takes over and keeps it stuck to the skin pixels
+    const N = (C + 1) * (R2 + 1); let G = null, Fa = null; if (put && put !== 'none') { G = new Float32Array(N * 2); Fa = new Float32Array(N); for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i, q = put(i / C, j / R2); G[k * 2] = q[0]; G[k * 2 + 1] = q[1]; Fa[k] = q[2]; } }
+    const out = T.skinStep(G, Fa, W, H); if (!out) { GL.ink.visible = false; T.lastM = M; T.lastWH = [W, H]; return; }
+    for (let k = 0; k < N; k++) { const s2 = M.to(out.G[k * 2], out.G[k * 2 + 1]); P.setXYZ(k, s2[0], s2[1], 0); Fd.setX(k, out.F[k]); }
     P.needsUpdate = true; Fd.needsUpdate = true; GL.ink.visible = true; T.lastM = M; T.lastWH = [W, H]; },
+  /* skin lock: lock once the tattoo is placed and steady, follow the skin, fall back to the body model if the skin is lost */
+  skinStep(G, Fa, W, H) { if (T.still || !FLOW.cur) { if (G) T.last = { G, F: Fa }; return G ? { G, F: Fa } : null; }
+    const s = FLOW.cur.s, lk = T.lock;
+    if (lk) { if (FLOW.step(lk)) { const g = new Float32Array(lk.G0.length); for (let k = 0; k < g.length; k += 2) { const q = FLOW.ap(lk.H, lk.G0[k], lk.G0[k + 1]); g[k] = q[0] / s; g[k + 1] = q[1] / s; }
+        // if the body model says the tattoo is far away for a while, trust the model and lock again
+        if (G) { const c = (A, i) => (A[i] + A[A.length / 2 + i] ) / 2, mid = (G.length / 2) & ~1, dx = G[mid] - g[mid], dy = G[mid + 1] - g[mid + 1], size = Math.hypot(G[0] - G[G.length - 2], G[1] - G[G.length - 1]);
+          if (Math.hypot(dx, dy) > size * 0.6) { if (++lk.bad > 12) { T.dropLock(); return { G, F: Fa }; } } else lk.bad = 0; }
+        T.last = { G: g, F: lk.F }; return T.last; }
+      T.dropLock(); }
+    const base = G ? { G, F: Fa } : (T.last && !SPOTS[T.spot].need ? T.last : null); if (!base) { T.steady = 0; return null; }
+    if (!T.drag && ++T.steady > 5) { const g2 = new Float32Array(base.G.length); for (let k = 0; k < g2.length; k++) g2[k] = base.G[k] * s; const L2 = FLOW.start(g2);
+      if (L2) { L2.F = base.F.slice(); T.lock = L2; T.noLock = 0; } else T.noLock = (T.noLock || 0) + 1; }
+    T.last = base; return base; },
+  dropLock() { const lk = T.lock; T.lock = null; T.steady = 0;
+    // with no body model ("Anywhere"), keep the tattoo where the skin last had it
+    if (lk && !SPOTS[T.spot].need && T.last && T.lastWH) { const g = T.last.G, mid = (g.length / 2) & ~1, [W, H] = T.lastWH; T.off = { u: g[mid] / W - 0.5, v: g[mid + 1] / H - 0.5 }; } },
   /* touch: drag to move along or round the limb, pinch to resize, twist to turn */
   wire() { const c = GL.r.domElement, pts = new Map(); let g = null;
     const toVid = e => { const r = c.getBoundingClientRect(), M = T.lastM; return M ? M.from(e.clientX - r.left, e.clientY - r.top) : { x: 0, y: 0 }; };
     const pair = () => { const [a, b] = [...pts.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x) * (T.mirror ? -1 : 1) }; };
-    c.addEventListener('pointerdown', e => { c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size === 2) { const p = pair(); g = { two: 1, d: p.d, ang: p.ang, s: T.scale, r: T.rot }; } else g = { p: toVid(e), off: { ...T.off } }; });
+    c.addEventListener('pointerdown', e => { T.drag = true; T.dropLock(); c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size === 2) { const p = pair(); g = { two: 1, d: p.d, ang: p.ang, s: T.scale, r: T.rot }; } else g = { p: toVid(e), off: { ...T.off } }; });
     c.addEventListener('pointermove', e => { if (!pts.has(e.pointerId) || !g) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (g.two && pts.size >= 2) { const p = pair(); T.scale = Math.max(0.25, Math.min(3.5, g.s * p.d / g.d)); T.rot = g.r + (p.ang - g.ang); return; }
       if (g.two) return; const q = toVid(e), dx = q.x - g.p.x, dy = q.y - g.p.y, raw = T.raw, sp = SPOTS[T.spot], [W, H] = T.lastWH || [1, 1];
@@ -13389,7 +13482,7 @@ const T = {
       A = raw.A || raw.p5; B = raw.B || raw.p7; if (T.spot === 'wrist') { A = raw.p0; B = raw.p9; }
       const L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1, ux = (B[0] - A[0]) / L, uy = (B[1] - A[1]) / L, k = T.spot === 'wrist' ? -1 : 1;
       T.off = { u: Math.max(-0.6, Math.min(0.6, g.off.u + k * (dx * ux + dy * uy) / L * (T.spot === 'wrist' ? 0.5 : 1))), v: Math.max(-1.4, Math.min(1.4, g.off.v + (-dx * uy + dy * ux) / (L * 0.2))) }; });
-    const up = e => { pts.delete(e.pointerId); if (pts.size < 2 && g && g.two) g = null; if (!pts.size) g = null; T.sizeIn.lastChild.value = Math.round(T.scale * 100); T.rotIn.lastChild.value = Math.round(T.rot * 180 / Math.PI); }; c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up); },
+    const up = e => { pts.delete(e.pointerId); if (pts.size < 2 && g && g.two) g = null; if (!pts.size) { g = null; T.drag = false; T.steady = 0; } T.sizeIn.lastChild.value = Math.round(T.scale * 100); T.rotIn.lastChild.value = Math.round(T.rot * 180 / Math.PI); }; c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up); },
   async capture() { const b = await new Promise(r => GL.r.domElement.toBlob(r, 'image/jpeg', 0.92)); if (!b) return; T.L.classList.add('flash'); setTimeout(() => T.L && T.L.classList.remove('flash'), 300); await shareOrSave(b, 'tattoo-try-on.jpg'); },
   close() { if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.stream = null; T.ready = false; if (GL.r) { GL.r.dispose(); GL.r.domElement.remove(); GL.r = null; } if (T.L) T.L.remove(); T.L = null; T.raw = null; }
 };
@@ -13414,7 +13507,7 @@ document.head.append(el('style', null, `
 .tt-shot{position:absolute;left:50%;bottom:calc(18px + var(--safe-b));transform:translateX(-50%);z-index:4;width:68px;height:68px;border-radius:50%;background:#fff;border:5px solid rgba(201,164,95,.9);box-shadow:0 0 0 4px rgba(0,0,0,.35)}
 .tt.flash:after{content:"";position:absolute;inset:0;background:#fff;opacity:.7;z-index:9;pointer-events:none}
 `));
-window.PicAliveTattoo = { open: () => T.open(), T, GL, DESIGNS, toInk, textInk };
+window.PicAliveTattoo = { open: () => T.open(), T, GL, FLOW, DESIGNS, toInk, textInk };
 })();
 </script>
 <script>(() => {
@@ -13504,7 +13597,7 @@ function camTool(cfg) {
     el('button', { class: 'icon-btn', 'aria-label': 'Switch camera', onclick: () => { S.facing = S.facing === 'user' ? 'environment' : 'user'; startCam().catch(() => toast('Could not switch camera')); } }, svg('M4 7h11l-3-3M20 17H9l3 3')),
     el('button', { class: 'icon-btn', 'aria-label': 'Use a photo', onclick: async () => { const img = await pickPhoto(); if (!img) return; if (S.stream) for (const t of S.stream.getTracks()) t.stop(); S.stream = null; S.still = canvasOf(img, 1400); S.mirror = false; if (cfg.onSource) cfg.onSource(S); kick(); } }, svg('M4 4h16v16H4zM8 15l3-3 2 2 3-4 2 5')));
   const shot = el('button', { class: 'tt-shot', 'aria-label': 'Take a photo', onclick: async () => { const b = await new Promise(res => r.domElement.toBlob(res, 'image/jpeg', 0.92)); if (b) await shareOrSave(b, cfg.file); } });
-  L.append(top, status, panel, shot); S.L = L;
+  L.append(top, status, panel, shot); S.L = L; S.kick = kick;
   kick();
   startCam().catch(() => S.say('No camera here. Tap the picture button to use a photo.'));
   guide(cfg.key, cfg.title, cfg.steps);
@@ -13514,7 +13607,7 @@ function camTool(cfg) {
 /* ───────────── Paint my walls: grow the wall from the tapped point, stop at edges and other colours ───────────── */
 const PAINTS = [['Sage green', '#9caf88'], ['Warm white', '#f1ebdf'], ['Greige', '#bdb3a3'], ['Terracotta', '#c0714f'], ['Clay pink', '#d3a597'], ['Olive', '#7a7a4f'], ['Forest', '#2f4a3a'], ['Navy', '#2b3a55'], ['Dusty blue', '#8ea3b5'], ['Charcoal', '#3c3d40'], ['Butter', '#ecd9a0'], ['Burgundy', '#6e2a32'], ['Lilac', '#b9a8c9'], ['Mocha', '#7b5c49']];
 function wallFill(S, fc) {
-  const seeds = S.seeds; if (!seeds.length) { S.setMask(new Uint8Array(1), 1, 1); return; }
+  const seeds = S.seeds; if (!seeds.length && !(S.walls && S.walls.length)) { S.setMask(new Uint8Array(1), 1, 1); return; }
   const k = 256 / Math.max(fc.width, fc.height), w = Math.max(8, Math.round(fc.width * k)), h = Math.max(8, Math.round(fc.height * k));
   const sc = S.sc || (S.sc = cv(w, h)); if (sc.width !== w || sc.height !== h) { sc.width = w; sc.height = h; } const x = sc.getContext('2d', { willReadFrequently: true });
   x.drawImage(fc, 0, 0, w, h); const d = x.getImageData(0, 0, w, h).data, n = w * h;
@@ -13526,27 +13619,37 @@ function wallFill(S, fc) {
     const g = q => { const gx = q[i - w + 1] + 2 * q[i + 1] + q[i + w + 1] - q[i - w - 1] - 2 * q[i - 1] - q[i + w - 1], gy = q[i + w - 1] + 2 * q[i + w] + q[i + w + 1] - q[i - w - 1] - 2 * q[i - w] - q[i - w + 1]; return Math.hypot(gx, gy) / 4; };
     if (g(L) / (0.25 + L[i]) > et || (g(A) + g(B)) * 4 > et) E[i] = 1; }
   const out = new Uint8Array(n), stack = new Int32Array(n), tol = S.tol; let lsum = 0, cnt = 0, rs = 0, gs = 0, bs = 0;
-  for (const [u, v] of seeds) { const sx = Math.min(w - 2, Math.max(1, Math.round(u * w))), sy = Math.min(h - 2, Math.max(1, Math.round(v * h)));
-    let sa = 0, sb = 0, sl = 0, m = 0; for (let yy = -2; yy <= 2; yy++) for (let xx = -2; xx <= 2; xx++) { const X = sx + xx, Y = sy + yy; if (X < 0 || Y < 0 || X >= w || Y >= h) continue; const j = Y * w + X; sa += A[j]; sb += B[j]; sl += L[j]; m++; }
-    sa /= m; sb /= m; sl /= m; let top = 0; const s0 = sy * w + sx; if (out[s0]) continue; out[s0] = 255; stack[top++] = s0;
+  // a new tap gives a wall its colour; after that each wall is found again from where it was last frame, so it stays put as the camera moves
+  const walls = S.walls || (S.walls = []);
+  for (const sd of seeds.splice(0)) { const sx = Math.min(w - 2, Math.max(1, Math.round(sd[0] * w))), sy = Math.min(h - 2, Math.max(1, Math.round(sd[1] * h)));
+    let sa = 0, sb = 0, sl = 0, m = 0; for (let yy = -2; yy <= 2; yy++) for (let xx = -2; xx <= 2; xx++) { const j = (sy + yy) * w + sx + xx; sa += A[j]; sb += B[j]; sl += L[j]; m++; }
+    if (walls.length >= 4) walls.shift(); walls.push({ sa: sa / m, sb: sb / m, sl: sl / m, at: [sy * w + sx] }); }
+  const prev = S.prev && S.prev.length === n && !S.still ? S.prev : null;
+  for (const wl of walls) { let { sa, sb, sl } = wl, top = 0; const starts = [];
+    if (prev) { for (let y = 3; y < h - 3; y += 3) for (let X = 3; X < w - 3; X += 3) { const j = y * w + X; if (prev[j] > 230 && prev[j - 3] > 230 && prev[j + 3] > 230 && prev[j - 3 * w] > 230 && prev[j + 3 * w] > 230 && !E[j]) { const da = A[j] - sa, db = B[j] - sb; if (da * da + db * db < 0.0004 * tol * tol && Math.abs(L[j] / (sl + 0.02) - 1) < 0.5) starts.push(j); } } }
+    if (starts.length) wl.at = [starts[starts.length >> 1]];
+    else { const j = wl.at[0], da = A[j] - sa, db = B[j] - sb; if (!E[j] && da * da + db * db < 0.0005 * tol * tol && Math.abs(L[j] / (sl + 0.02) - 1) < 0.45) starts.push(j); }   // only if that spot still looks like this wall
+    for (const s0 of starts) if (!out[s0]) { out[s0] = 255; stack[top++] = s0; }
     const ok = (j, i) => { if (out[j] || E[j]) return false; const da = A[j] - sa, db = B[j] - sb; if (da * da + db * db > 0.0006 * tol * tol) return false; const lr = L[j] / (sl + 0.02); if (lr < 0.4 || lr > 1.7) return false; return Math.abs(L[j] - L[i]) < 0.03 * tol; };
     while (top) { const i = stack[--top], X = i % w; lsum += L[i]; cnt++; rs += d[i * 4]; gs += d[i * 4 + 1]; bs += d[i * 4 + 2];
       if (X > 0 && ok(i - 1, i)) { out[i - 1] = 255; stack[top++] = i - 1; } if (X < w - 1 && ok(i + 1, i)) { out[i + 1] = 255; stack[top++] = i + 1; }
       if (i >= w && ok(i - w, i)) { out[i - w] = 255; stack[top++] = i - w; } if (i < n - w && ok(i + w, i)) { out[i + w] = 255; stack[top++] = i + w; } } }
   // the edge pixels themselves belong to the wall when most neighbours do (the full-detail check in the shader trims them)
   const o2 = new Uint8Array(n); for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const i = y * w + X; let s2 = 0; for (const j of [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1]) s2 += out[j] ? 1 : 0; o2[i] = out[i] || s2 >= 4 ? 255 : 0; }
-  if (S.prev && S.prev.length === n && !S.still) for (let i = 0; i < n; i++) o2[i] = (o2[i] * 0.6 + S.prev[i] * 0.4) | 0; S.prev = o2;
+  if (prev) for (let i = 0; i < n; i++) o2[i] = (o2[i] * 0.7 + prev[i] * 0.3) | 0; S.prev = o2;
   S.ref = cnt ? lsum / cnt : 0.6; if (cnt) S.refc = [rs / cnt / 255, gs / cnt / 255, bs / cnt / 255]; S.setMask(o2, w, h);
 }
 function openPaint() {
   const S = camTool({ key: 'paint', title: 'Paint my walls', mode: 0, facing: 'environment', file: 'wall-colour.jpg', amtLabel: 'Paint', colours: PAINTS,
-    steps: ['Point your camera at a wall, or tap the picture button to use a photo.', 'Tap the wall. It changes colour live, with the real light and shadows.', 'Pick colours below. Tap another wall to add it. Take a photo to share.'],
+    steps: ['Point your camera at a wall, or tap the picture button to use a photo.', 'Tap the wall. It changes colour live and stays on that wall as you move.', 'Tap Freeze for a clean still, pick colours, then take a photo to share.'],
     extra: S2 => { const row = el('div', { class: 'cx-mini' });
-      row.append(el('button', { onclick: () => { S2.seeds = []; S2.prev = null; S2.dirty = true; S2.say('Tap a wall to paint it'); } }, 'Clear'),
+      const fr = el('button', { onclick: () => { if (S2.frozen) { S2.frozen = false; S2.still = null; S2.prev = null; fr.textContent = 'Freeze'; S2.kick(); } else if (!S2.still) { const c = document.createElement('canvas'), f = S2.L.querySelector('canvas'); S2.frozen = true; fr.textContent = 'Go live';
+        const src = S2.fc; c.width = src.width; c.height = src.height; c.getContext('2d').drawImage(src, 0, 0); S2.still = c; S2.dirty = true; S2.kick(); } } }, 'Freeze');
+      row.append(fr, el('button', { onclick: () => { S2.seeds = []; S2.walls = []; S2.prev = null; S2.dirty = true; S2.say('Tap a wall to paint it'); } }, 'Clear'),
         el('label', null, 'Edge', el('input', { type: 'range', min: 5, max: 25, value: 10, oninput: e => { S2.tol = e.target.value / 10; S2.dirty = true; } }))); return row; },
-    onSource: S2 => { S2.seeds = []; S2.prev = null; S2.say('Tap a wall to paint it'); },
-    tap: (S2, u, v) => { if (S2.seeds.length >= 4) S2.seeds.shift(); S2.seeds.push([u, v]); S2.say('Painted. Tap another wall to add it.', true); },
-    frame: (S2, fc) => wallFill(S2, fc) });
+    onSource: S2 => { S2.seeds = []; S2.walls = []; S2.prev = null; S2.say('Tap a wall to paint it'); },
+    tap: (S2, u, v) => { S2.seeds.push([u, v]); S2.say('Painted. Tap another wall to add it, or Freeze for a clean photo.', true); },
+    frame: (S2, fc) => { S2.fc = fc; wallFill(S2, fc); } });
   S.seeds = []; S.tol = 1; S.say('Tap a wall to paint it');
 }
 
@@ -13575,7 +13678,7 @@ function openHair() {
 }
 
 /* tattoo gets a guide too */
-const TT = window.PicAliveTattoo; if (TT) { const o = TT.open; TT.open = () => { o(); guide('tattoo', 'Tattoo try-on', ['Pick where it goes: forearm, upper arm, wrist, back of hand or finger.', 'Show that part to the camera. The tattoo sticks to your skin as you move.', 'Pick a design, type a name or upload your own. Drag, pinch or twist to adjust.']); }; }
+const TT = window.PicAliveTattoo; if (TT) { const o = TT.open; TT.open = () => { o(); guide('tattoo2', 'Tattoo try-on', ['Pick where it goes, or Anywhere for any skin (neck, leg, chest).', 'Place it, then hold still for a moment. It locks to your skin and moves with it.', 'For the strongest lock, draw a small mark with a pen where the tattoo goes. The tattoo covers it.']); }; }
 
 document.head.append(el('style', null, `
 .pg{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);display:grid;place-items:center;padding:20px}
