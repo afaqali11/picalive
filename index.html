@@ -13006,6 +13006,9 @@ h1,h2,.serif{font-family:var(--serif);font-weight:500;letter-spacing:-.01em}
 .hx h1{font-size:clamp(2rem,9vw,2.6rem);line-height:1.02;margin:0 0 10px}.hx h1 em{font-style:italic;color:var(--accent-2)}.hx p{color:#d6cdbf;margin:0 0 18px;font-size:.95rem;line-height:1.45}
 .hx .btn{width:100%;padding:15px;font-size:1rem}.hx .link{display:block;margin:12px auto 0;color:var(--accent-2);font-size:.9rem;font-weight:600;text-decoration:underline;text-underline-offset:4px;background:none;border:0}
 .sx{display:flex;align-items:baseline;justify-content:space-between;margin:26px 2px 12px}.sx h2{font-size:1.35rem}.sx span{font-size:.78rem;color:var(--muted)}
+.intents{display:grid;gap:10px}.intent{display:grid;grid-template-columns:76px 1fr 18px;gap:14px;align-items:center;text-align:left;padding:10px 12px 10px 10px;border-radius:18px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,246,230,.05),rgba(255,246,230,.02))}
+.intent i{width:76px;height:76px;border-radius:13px;background-size:cover;background-position:center;display:grid;place-items:center}.intent i.ic svg{width:34px;height:34px;color:#fff}.intent b{display:flex;align-items:center;gap:8px;font-size:1rem}.intent b em{font-style:normal;font-size:.58rem;font-weight:800;letter-spacing:.1em;padding:3px 6px;border-radius:99px;background:var(--gold);color:#1b150c}
+.intent span{display:block;font-size:.78rem;color:var(--muted);line-height:1.35;margin-top:3px}.intent>svg{width:18px;height:18px;color:var(--muted)}.intent:active{transform:scale(.985)}
 .tools{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .tool{position:relative;text-align:left;padding:14px;border-radius:22px;border:1px solid var(--line);background:var(--surface);min-height:132px;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;overflow:hidden}
 .tool:after{content:"";position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;background:radial-gradient(circle,rgba(201,164,95,.22),transparent 70%)}
@@ -13104,17 +13107,23 @@ function home() {
   const looks = el('div', { class: 'looks' }, ...LOOKS.map(L => lookCard(L)));
   const spaces = el('div', { class: 'spaces' }, ...TEMPLATES.map(t => { const area = t.rooms.reduce((s2, r) => s2 + r[3] * r[4], 0); return el('button', { onclick: () => D.start(t.id) }, svg(t.icon), el('b', null, t.name), el('small', null, `${t.rooms.length} room${t.rooms.length > 1 ? 's' : ''} · ${Math.round(area)} m²`)); }));
   const tools = el('div', { class: 'tools' },
-    T('big', 'M3 21V9l9-6 9 6v12H3zM9 21v-6h6v6', 'Home and interior design', 'Rooms, houses, 400+ models, AR walk-through', () => D.start()),
-    T('', 'M12 3c2 3 5 5 5 9a5 5 0 01-10 0c0-4 3-6 5-9zM9 13c1 1 2 1.5 3 1.5', 'Tattoo try-on', 'See a tattoo on your arm, live', () => (window.PicAliveTattoo ? window.PicAliveTattoo.open() : toast('Tattoo try-on is coming in the next update')), true),
-    T('', 'M4 4h16v16H4zM8 15l3-3 2 2 3-4 2 5', 'Wall art in AR', 'Your photo, framed, on your wall', () => R.Art.open('wall')),
     T('', 'M3 7h18v10H3zM3 12h18', 'Rugs and mats', 'Any design at real size on your floor', () => R.Art.open('floor')),
     T('', 'M7 3h10l1 4v13a1 1 0 01-1 1H7a1 1 0 01-1-1V7zM6 7h12', 'Product box in 3D', 'Exact size, your photo on every side', () => R.Box.open()),
     T('', 'M10 2h4v4l2 3v12a1 1 0 01-1 1H9a1 1 0 01-1-1V9l2-3z', 'Bottle or jar', 'Perfectly round model from one photo', () => R.Round.open()),
     T('', 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5', 'AI 360° scan', 'Free AI model from a walk-around', () => P.Cap.open()));
+  const X = k => window.PicAliveExtra && window.PicAliveExtra[k] ? window.PicAliveExtra[k]() : toast('Coming soon');
+  const I = (img, title, how, fn, tag) => el('button', { class: 'intent', onclick: fn }, img[0] === '#' ? el('i', { class: 'ic', style: `background:${img.split('|')[1]}` }, svg(img.slice(1).split('|')[0])) : el('i', { style: `background-image:url('${img}')` }), el('div', null, el('b', null, title, tag ? el('em', null, tag) : ''), el('span', null, how)), svg('M9 5l7 7-7 7'));
+  const intents = el('div', { class: 'intents' },
+    I(lookImg('organic-villa'), 'Design or decorate my home', 'Pick a look or a room, it comes furnished. Change anything, walk through it, see it in AR.', () => D.start()),
+    I('#M4 4h13v5H4zM17 6h3v6h-8v3M11 15h2v6h-2z|linear-gradient(135deg,#9caf88 0 33%,#c0714f 33% 66%,#2b3a55 66%)', 'Paint my walls', 'Point at a wall and tap it. See any colour live, with real light.', () => X('openPaint'), 'NEW'),
+    I('#M12 3c2 3 5 5 5 9a5 5 0 01-10 0c0-4 3-6 5-9zM9 13c1 1 2 1.5 3 1.5|linear-gradient(135deg,#c8936f,#8a5a3c)', 'Try a tattoo on my skin', 'Show your arm or hand. The tattoo sticks to your skin as you move.', () => window.PicAliveTattoo ? window.PicAliveTattoo.open() : toast('Coming soon'), 'NEW'),
+    I('#M5 20c0-9 3-15 7-15s7 6 7 15M8 20c0-6 1.5-10 4-10s4 4 4 10|linear-gradient(135deg,#d77a98,#6f1f2c 70%)', 'Try a new hair colour', 'Look at the camera. Your hair changes colour live.', () => X('openHair'), 'NEW'),
+    I(lookImg('paris-suite'), 'See my art on my wall', 'Your photo or painting, framed, at real size on your wall.', () => R.Art.open('wall')));
   const box = el('div', { id: 'hx-new' }, hero,
+    el('div', { class: 'sx' }, el('h2', null, 'What do you want to do?'), el('span', null, 'All free')), intents,
     el('div', { class: 'sx' }, el('h2', null, 'Ready-made looks'), el('span', null, 'Open one, make it yours')), looks,
     el('div', { class: 'sx' }, el('h2', null, 'Start from a space'), el('span', null, 'Pick a style next')), spaces,
-    el('div', { class: 'sx' }, el('h2', null, 'All tools'), el('span', null, 'Free, in your browser')), tools);
+    el('div', { class: 'sx' }, el('h2', null, 'More tools'), el('span', null, 'For makers and sellers')), tools);
   const old = $('#hx-new'); if (old) old.remove(); head.after(box);
   if (scans) { box.after(scans); const h = scans.querySelector('h2'); if (h) h.textContent = 'My designs and models'; }
   if (!$('#home .foot-note')) w.append(el('p', { class: 'foot-note' }, 'Models: Poly Haven (CC0), Kenney (CC0), Khronos samples (CC BY 4.0) and pieces made with code. Nothing leaves your phone unless you share it.'));
@@ -13190,103 +13199,156 @@ function toInk(img, keepColour) { const c = canvasOf(img, 900), x = c.getContext
   x.putImageData(d, 0, 0); return c; }
 
 /* ───────────── body tracking (MediaPipe Tasks Vision, Apache-2.0, files served with the app) ───────────── */
-const AI = { lib: null, pose: null, hand: null, mode: null };
-async function loadAI(mode) {
+const AI = { lib: null, fs: null, pose: null, hand: null, mode: {} };
+async function loadAI(kind, mode) {
   if (!AI.lib) AI.lib = await import(new URL('tv/vision_bundle.mjs', location.href).href);
-  const fs = await AI.lib.FilesetResolver.forVisionTasks(new URL('tv', location.href).href);
-  const make = async (K, file, extra) => { for (const delegate of ['GPU', 'CPU']) { try { return await AI.lib[K].createFromOptions(fs, { baseOptions: { modelAssetPath: new URL('tv/' + file, location.href).href, delegate }, runningMode: mode, ...extra }); } catch (e) { if (delegate === 'CPU') throw e; } } };
-  if (!AI.pose) AI.pose = await make('PoseLandmarker', 'pose_landmarker_lite.task', { numPoses: 1 }); if (!AI.hand) AI.hand = await make('HandLandmarker', 'hand_landmarker.task', { numHands: 2 });
-  if (AI.mode !== mode) { await AI.pose.setOptions({ runningMode: mode }); await AI.hand.setOptions({ runningMode: mode }); AI.mode = mode; }
+  if (!AI.fs) AI.fs = await AI.lib.FilesetResolver.forVisionTasks(new URL('tv', location.href).href);
+  const make = async (K, file, extra) => { let err; for (const delegate of ['GPU', 'CPU']) { try { return await AI.lib[K].createFromOptions(AI.fs, { baseOptions: { modelAssetPath: new URL('tv/' + file, location.href).href, delegate }, runningMode: mode, ...extra }); } catch (e) { err = e; } } throw err; };
+  if (kind === 'pose' && !AI.pose) { AI.pose = await make('PoseLandmarker', 'pose_landmarker_full.task', { numPoses: 1, minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.6 }); AI.mode.pose = mode; }
+  if (kind === 'hand' && !AI.hand) { AI.hand = await make('HandLandmarker', 'hand_landmarker.task', { numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.6 }); AI.mode.hand = mode; }
+  const m = AI[kind]; if (m && AI.mode[kind] !== mode) { await m.setOptions({ runningMode: mode }); AI.mode[kind] = mode; }
 }
+/* One Euro filter: steady when you hold still, no lag when you move fast */
+class Euro { constructor(minCut = 1.4, beta = 9, dCut = 1.2) { this.mc = minCut; this.b = beta; this.dc = dCut; this.x = null; this.dx = 0; this.t = 0; }
+  a(cut, dt) { const r = 2 * Math.PI * cut * dt; return r / (r + 1); }
+  f(v, t) { if (this.x === null || t - this.t > 0.5) { this.x = v; this.dx = 0; this.t = t; return v; } const dt = Math.max(1e-3, t - this.t); this.t = t; const d = (v - this.x) / dt; this.dx += this.a(this.dc, dt) * (d - this.dx);
+    const cut = this.mc + this.b * Math.abs(this.dx); this.x += this.a(cut, dt) * (v - this.x); return this.x; } }
 const SPOTS = {
-  forearm: { name: 'Forearm', need: 'pose', len: 0.62, wrap: 0.42 }, upper: { name: 'Upper arm', need: 'pose', len: 0.55, wrap: 0.45 },
-  wrist: { name: 'Inner wrist', need: 'hand', len: 0.5, wrap: 0.5 }, hand: { name: 'Back of hand', need: 'hand', len: 0.62, wrap: 0.75 }, finger: { name: 'Finger', need: 'hand', len: 0.55, wrap: 0.55 },
-  free: { name: 'Anywhere', need: null, len: 1, wrap: 0 } };
+  forearm: { name: 'Forearm', need: 'pose', len: 0.62, tip: 'Hold your forearm across the camera, inside facing it' },
+  upper: { name: 'Upper arm', need: 'pose', len: 0.55, tip: 'Step back so your shoulder and elbow are in view' },
+  wrist: { name: 'Wrist', need: 'hand', len: 0.55, tip: 'Show your hand and wrist, fingers open' },
+  hand: { name: 'Back of hand', need: 'hand', len: 0.6, tip: 'Show the back of your hand, fingers open' },
+  finger: { name: 'Finger', need: 'hand', len: 0.62, tip: 'Show your hand, index finger straight' },
+  free: { name: 'Anywhere', need: null, len: 1, tip: 'Drag, pinch and twist to place it' } };
+
+/* ───────────── GPU drawing: camera picture and ink drawn together, from the same frame ───────────── */
+const { THREE } = window.AREngine;
+const GL = {
+  init(host) { const r = GL.r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false }); r.setPixelRatio(Math.min(2, devicePixelRatio || 1)); r.autoClear = true; r.setClearColor(0x000000);
+    host.append(r.domElement); r.domElement.className = 'tt-view'; GL.scene = new THREE.Scene(); GL.cam = new THREE.PerspectiveCamera();
+    const vs = 'attribute float fade; varying vec2 vUv; varying float vF; void main(){ vUv = uv; vF = fade; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+    GL.frameCv = cv(16); GL.ftex = new THREE.CanvasTexture(GL.frameCv); GL.ftex.minFilter = THREE.LinearFilter; GL.ftex.generateMipmaps = false;
+    const bgGeo = new THREE.BufferGeometry(); bgGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12), 3)); bgGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 0, 0, 1, 0], 2)); bgGeo.setAttribute('fade', new THREE.Float32BufferAttribute([1, 1, 1, 1], 1)); bgGeo.setIndex([0, 2, 1, 2, 3, 1]);
+    GL.bg = new THREE.Mesh(bgGeo, new THREE.ShaderMaterial({ uniforms: { map: { value: GL.ftex } }, vertexShader: vs, fragmentShader: 'uniform sampler2D map; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(map, vUv).rgb, 1.0); }', side: THREE.DoubleSide, depthTest: false, depthWrite: false }));
+    GL.bg.frustumCulled = false; GL.scene.add(GL.bg);
+    const C = GL.C = 28, R2 = GL.R = 14, n = (C + 1) * (R2 + 1), idx = []; const g = new THREE.BufferGeometry(), uv = new Float32Array(n * 2);
+    for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i; uv[k * 2] = i / C; uv[k * 2 + 1] = 1 - j / R2; if (i < C && j < R2) idx.push(k, k + C + 1, k + 1, k + 1, k + C + 1, k + C + 2); }
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('fade', new THREE.Float32BufferAttribute(new Float32Array(n), 1).setUsage(THREE.DynamicDrawUsage)); g.setIndex(idx);
+    GL.ink = new THREE.Mesh(g, new THREE.ShaderMaterial({ uniforms: { map: { value: null }, op: { value: 0.9 }, healed: { value: 0 } }, vertexShader: vs,
+      fragmentShader: 'uniform sampler2D map; uniform float op; uniform float healed; varying vec2 vUv; varying float vF; void main(){ vec4 t = texture2D(map, vUv, healed * 0.7); vec3 ink = mix(t.rgb, vec3(0.10, 0.16, 0.17), healed * 0.45); float a = clamp(t.a * op * vF * (1.0 - healed * 0.18), 0.0, 1.0); gl_FragColor = vec4(mix(vec3(1.0), ink, a), 1.0); }',
+      depthTest: false, depthWrite: false, side: THREE.DoubleSide, blending: 5, blendSrc: 208, blendDst: 200, blendEquation: 100 }));   // custom blending: result = ink × skin (multiply)
+    GL.ink.frustumCulled = false; GL.ink.renderOrder = 2; GL.scene.add(GL.ink); },
+  size() { const c = GL.r.domElement, w = c.clientWidth || innerWidth, h = c.clientHeight || innerHeight; if (GL.w !== w || GL.h !== h) { GL.w = w; GL.h = h; GL.r.setSize(w, h, false); } },
+  setDesign(c) { if (GL.dtex) GL.dtex.dispose(); const t = GL.dtex = new THREE.CanvasTexture(c); t.anisotropy = 4; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; GL.ink.material.uniforms.map.value = t; }
+};
+/* video pixels → screen (cover for the live camera, contain for a photo), mirrored for the selfie camera */
+function mapper(VW, VH) { const SW = GL.w, SH = GL.h, k = T.still ? Math.min(SW / VW, SH / VH) : Math.max(SW / VW, SH / VH), ox = (SW - VW * k) / 2, oy = (SH - VH * k) / 2;
+  return { k, to: (x, y) => { let sx = ox + x * k; if (T.mirror) sx = SW - sx; return [sx / SW * 2 - 1, -((oy + y * k) / SH * 2 - 1)]; },
+    from: (sx, sy) => { if (T.mirror) sx = SW - sx; return { x: (sx - ox) / k, y: (sy - oy) / k }; } }; }
 
 /* ───────────── the try-on screen ───────────── */
 const T = {
-  spot: 'forearm', design: null, scale: 1, rot: 0, off: { u: 0, v: 0 }, opacity: 0.9, healed: false, colour: false, mirror: true, facing: 'environment', pts: null, lost: 0, still: null,
+  spot: 'forearm', design: null, scale: 1, rot: 0, off: { u: 0, v: 0 }, opacity: 0.9, healed: false, colour: false, mirror: false, facing: 'environment', geo: null, lost: 0, still: null, F: {},
   async open() {
-    const L = T.L = el('section', { class: 'layer tt' }); document.body.append(L);
-    T.view = cv(10); T.view.className = 'tt-view'; T.video = el('video', { playsinline: true, muted: true, autoplay: true }); T.video.muted = true; T.video.setAttribute('playsinline', '');
+    const L = T.L = el('section', { class: 'layer tt' }); document.body.append(L); GL.init(L);
+    T.video = el('video', { playsinline: true, muted: true, autoplay: true }); T.video.muted = true; T.video.setAttribute('playsinline', '');
     T.status = el('div', { class: 'tt-status' }, 'Starting camera...');
     const top = el('div', { class: 'tt-top' }, el('button', { class: 'icon-btn', 'aria-label': 'Back', onclick: T.close }, svg('M15 5l-7 7 7 7')), el('b', null, 'Tattoo try-on'),
       el('button', { class: 'icon-btn', 'aria-label': 'Switch camera', onclick: T.flip }, svg('M4 7h11l-3-3M20 17H9l3 3')), el('button', { class: 'icon-btn', 'aria-label': 'Use a photo', onclick: T.photoMode }, svg('M4 4h16v16H4zM8 15l3-3 2 2 3-4 2 5')));
-    const spots = el('div', { class: 'tt-chips' }, ...Object.entries(SPOTS).map(([k, s]) => el('button', { class: k === T.spot ? 'on' : '', onclick: e => { T.spot = k; T.off = { u: 0, v: 0 }; T.pts = null; for (const b of spots.children) b.classList.toggle('on', b === e.currentTarget); } }, s.name)));
+    const spots = T.spotsEl = el('div', { class: 'tt-chips' }, ...Object.entries(SPOTS).map(([k, s]) => el('button', { class: k === T.spot ? 'on' : '', onclick: () => T.setSpot(k) }, s.name)));
     const designs = T.designs = el('div', { class: 'tt-designs' });
     const sl = (lab, min, max, val, fn) => el('label', null, el('span', null, lab), el('input', { type: 'range', min, max, step: 1, value: val, oninput: e => fn(+e.target.value) }));
-    const opts = el('div', { class: 'tt-opts' }, sl('Size', 30, 250, 100, v => T.scale = v / 100), sl('Turn', -180, 180, 0, v => T.rot = v * Math.PI / 180), sl('Ink', 30, 100, 90, v => T.opacity = v / 100),
+    T.sizeIn = sl('Size', 30, 250, 100, v => T.scale = v / 100); T.rotIn = sl('Turn', -180, 180, 0, v => T.rot = v * Math.PI / 180);
+    const opts = el('div', { class: 'tt-opts' }, T.sizeIn, T.rotIn, sl('Ink', 30, 100, 90, v => T.opacity = v / 100),
       el('div', { class: 'tt-tog' }, el('button', { class: 'on', onclick: e => { T.healed = false; e.currentTarget.classList.add('on'); e.currentTarget.nextSibling.classList.remove('on'); } }, 'Fresh'), el('button', { onclick: e => { T.healed = true; e.currentTarget.classList.add('on'); e.currentTarget.previousSibling.classList.remove('on'); } }, 'Healed')));
     const shot = el('button', { class: 'tt-shot', 'aria-label': 'Take a photo', onclick: T.capture });
-    L.append(T.view, top, T.status, el('div', { class: 'tt-panel' }, spots, designs, opts), shot);
-    T.fillDesigns(); if (!T.design) T.setDesign(DESIGNS.mandala[1](), 'mandala');
-    T.wire(); T.loop();
-    try { await T.startCam(); } catch (e) { T.status.textContent = 'No camera here. Tap the picture button to try it on a photo.'; }
-    try { T.status.textContent = 'Loading body tracking (first time only)...'; await loadAI('VIDEO'); T.ready = true; T.status.textContent = 'Show your ' + SPOTS[T.spot].name.toLowerCase() + ' to the camera'; }
-    catch (e) { T.status.textContent = 'Tracking could not start. Drag the tattoo into place by hand.'; T.spot = 'free'; }
+    const panel = el('div', { class: 'tt-panel' }), hide = el('button', { class: 'tt-hide', 'aria-label': 'Hide or show tools', onclick: () => { panel.classList.toggle('mini'); hide.textContent = panel.classList.contains('mini') ? 'Show tools' : 'Hide tools'; } }, 'Hide tools');
+    panel.append(hide, spots, designs, opts); L.append(top, T.status, panel, shot);
+    T.fillDesigns(); T.setDesign(T.design || DESIGNS.mandala[1](), T.dkey || 'mandala');
+    T.wire(); T.run();
+    try { await T.startCam(); } catch (e) { T.say('No camera here. Tap the picture button to try it on a photo.'); }
+    T.setSpot(T.spot);
   },
+  say(t, ok) { if (T.status.textContent !== t) T.status.textContent = t; T.status.classList.toggle('ok', !!ok); },
+  async setSpot(k) { T.spot = k; T.off = { u: 0, v: 0 }; T.geo = null; T.raw = null; T.F = {}; for (const b of T.spotsEl.children) b.classList.toggle('on', b.textContent === SPOTS[k].name);
+    const need = SPOTS[k].need; if (!need) { T.ready = true; return; } T.ready = false; T.say('Loading ' + (need === 'pose' ? 'arm' : 'hand') + ' tracking (first time only)...');
+    try { await loadAI(need, T.still ? 'IMAGE' : 'VIDEO'); T.ready = true; if (T.still) T.detectStill(); } catch (e) { T.say('Tracking could not start here. Drag the tattoo into place.'); T.spot = 'free'; T.ready = true; } },
   async startCam() { if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.still = null;
-    T.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: T.facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-    T.video.srcObject = T.stream; await T.video.play(); T.mirror = T.facing === 'user'; },
-  flip() { T.facing = T.facing === 'user' ? 'environment' : 'user'; T.startCam().catch(() => toast('Could not switch camera')); },
-  async photoMode() { const img = await pickPhoto(); if (!img) return; if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.stream = null; T.still = canvasOf(img, 1400); T.mirror = false; T.pts = null;
-    T.status.textContent = 'Finding your arm or hand...'; try { await loadAI('IMAGE'); T.detect(T.still, 0, true); T.status.textContent = T.pts ? 'Placed. Drag, pinch or twist to adjust.' : 'Could not find an arm or hand. Drag the tattoo into place.'; } catch (e) { T.status.textContent = 'Drag the tattoo into place by hand.'; } },
+    T.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: T.facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+    T.video.srcObject = T.stream; await T.video.play(); T.mirror = T.facing === 'user'; T.F = {}; T.run(); },
+  flip() { T.facing = T.facing === 'user' ? 'environment' : 'user'; T.startCam().then(() => T.setSpot(T.spot)).catch(() => toast('Could not switch camera')); },
+  async photoMode() { const img = await pickPhoto(); if (!img) return; if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.stream = null; T.still = canvasOf(img, 1400); T.mirror = false; T.geo = null; T.raw = null; T.F = {}; T.run();
+    if (SPOTS[T.spot].need) { T.say('Finding your ' + SPOTS[T.spot].name.toLowerCase() + '...'); await T.setSpot(T.spot); } },
+  detectStill() { try { T.detect(T.still, 0, true); } catch (e) {} T.say(T.raw ? 'Placed. Drag, pinch or twist to adjust.' : 'Could not find it in this photo. Drag the tattoo into place.', !!T.raw); },
   fillDesigns() { const D2 = T.designs; D2.textContent = '';
     D2.append(el('button', { class: 'tt-add', onclick: T.upload }, svg('M12 5v14M5 12h14'), el('span', null, 'My design')), el('button', { class: 'tt-add', onclick: T.text }, el('i', null, 'Aa'), el('span', null, 'Name or text')));
     for (const [k, [n, f]] of Object.entries(DESIGNS)) { const c = T['dz_' + k] || (T['dz_' + k] = f()); const b = el('button', { class: 'tt-d' + (T.dkey === k ? ' on' : ''), onclick: () => { T.setDesign(c, k); T.fillDesigns(); } }); const im = new Image(); im.src = c.toDataURL(); b.append(im, el('span', null, n)); D2.append(b); } },
-  setDesign(c, key) { T.design = c; T.dkey = key; T.off = { u: 0, v: 0 }; },
+  setDesign(c, key) { T.design = c; T.dkey = key; T.off = { u: 0, v: 0 }; if (GL.ink) GL.setDesign(c); },
   async upload() { const img = await pickPhoto(); if (!img) return; T.setDesign(toInk(img, T.colour), 'mine'); T.fillDesigns(); toast('White paper becomes see-through. Pinch to resize, twist to turn.', 3500); },
   async text() { const inp = el('input', { value: 'Forever', maxlength: 24, style: 'width:100%;margin-bottom:10px' }); let font = FONTS[0][1];
     const fonts = el('div', { class: 'rm-chips' }, ...FONTS.map(([n, f], i) => el('button', { class: i ? '' : 'on', style: `font-family:${f}`, onclick: e => { font = f; for (const b of fonts.children) b.classList.toggle('on', b === e.currentTarget); } }, n)));
     const ok = await P.U.dialog({ title: 'Your tattoo text', node: el('div', null, inp, fonts), actions: [{ label: 'Cancel', value: false }, { label: 'Try it on', kind: 'primary', value: true }] });
     if (!ok || !inp.value.trim()) return; try { await document.fonts.load(`64px ${font}`); } catch (e) {} T.setDesign(textInk(inp.value.trim(), font), 'text'); T.fillDesigns(); },
-  /* find the body part and turn it into a line on the screen (from A to B, with a width) */
-  detect(src, t, image) { if (!AI.pose) return; const W = src.videoWidth || src.width, H = src.videoHeight || src.height, sp = SPOTS[T.spot]; if (!sp.need) return; let A, B, wid;
-    const px = p => ({ x: p.x * W, y: p.y * H });
-    if (sp.need === 'pose') { const r = image ? AI.pose.detect(src) : AI.pose.detectForVideo(src, t); const lm = r.landmarks && r.landmarks[0]; if (lm) {
-        const side = [[11, 13, 15], [12, 14, 16]].map(s => ({ s, v: s.reduce((a, i) => a + (lm[i].visibility || 0), 0) })).sort((a, b) => b.v - a.v)[0].s;
-        const [sh, el2, wr] = side.map(i => lm[i]); if ((el2.visibility || 1) > 0.4 && ((T.spot === 'forearm' ? wr : sh).visibility || 1) > 0.4) {
-          if (T.spot === 'forearm') { A = px(el2); B = px(wr); } else { A = px(sh); B = px(el2); } wid = Math.hypot(B.x - A.x, B.y - A.y) * (T.spot === 'forearm' ? 0.36 : 0.42); } } }
-    else { const r = image ? AI.hand.detect(src) : AI.hand.detectForVideo(src, t); const lm = r.landmarks && r.landmarks[0]; if (lm) { const p = i => px(lm[i]); const w0 = p(0), m9 = p(9), i5 = p(5), p17 = p(17), hw = Math.hypot(i5.x - p17.x, i5.y - p17.y);
-        if (T.spot === 'hand') { A = w0; B = m9; wid = hw * 1.05; }
-        else if (T.spot === 'wrist') { const dx = (w0.x - m9.x), dy = (w0.y - m9.y), L = Math.hypot(dx, dy) || 1; A = { x: w0.x + dx / L * hw * 0.9, y: w0.y + dy / L * hw * 0.9 }; B = { x: w0.x - dx / L * hw * 0.1, y: w0.y - dy / L * hw * 0.1 }; wid = hw * 0.95; }
-        else { A = p(5); B = p(7); wid = hw * 0.26; } } }
-    if (A) { const k = image || !T.pts ? 1 : 0.45, s = T.pts; T.pts = s ? { A: { x: s.A.x + (A.x - s.A.x) * k, y: s.A.y + (A.y - s.A.y) * k }, B: { x: s.B.x + (B.x - s.B.x) * k, y: s.B.y + (B.y - s.B.y) * k }, wid: s.wid + (wid - s.wid) * k } : { A, B, wid }; T.lost = 0; }
-    else if (++T.lost > 12) T.pts = null; },
-  loop() { if (!T.L) return; requestAnimationFrame(T.loop); const v = T.video, src = T.still || (v.readyState >= 2 ? v : null); if (!src) return;
-    const W = src.videoWidth || src.width, H = src.videoHeight || src.height, c = T.view; if (c.width !== W || c.height !== H) { c.width = W; c.height = H; } const x = c.getContext('2d');
-    if (!T.still && T.ready && SPOTS[T.spot].need) { const now = performance.now(); if (now - (T.lastT || 0) > 30) { T.lastT = now; try { T.detect(v, now, false); } catch (e) {} } }
-    x.save(); if (T.mirror) { x.translate(W, 0); x.scale(-1, 1); } x.drawImage(src, 0, 0, W, H); if (T.design) T.draw(x, W, H); x.restore();
-    if (T.ready && !T.still) T.status.textContent = SPOTS[T.spot].need && !T.pts ? 'Show your ' + SPOTS[T.spot].name.toLowerCase() + ' to the camera' : 'Drag, pinch or twist to adjust';
-    T.status.classList.toggle('ok', !!T.pts || !SPOTS[T.spot].need); c.style.objectFit = T.still ? 'contain' : 'cover'; },
-  /* where the tattoo sits: centre, direction along the limb, size */
-  frame(W, H) { const sp = SPOTS[T.spot], p = T.pts;
-    if (!sp.need || !p) { const s = Math.min(W, H) * 0.32 * T.scale; return { cx: W / 2 + T.off.u * W, cy: H / 2 + T.off.v * H, ang: T.rot, len: s, wid: s * 1.6, wrap: 0, free: true }; }
-    const dx = p.B.x - p.A.x, dy = p.B.y - p.A.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux, along = 0.5 + T.off.u, across = T.off.v;
-    return { cx: p.A.x + dx * along + nx * across * p.wid, cy: p.A.y + dy * along + ny * across * p.wid, ang: Math.atan2(dy, dx) - Math.PI / 2 + T.rot, len: L * sp.len * T.scale, wid: p.wid, wrap: sp.wrap }; },
-  /* draw the ink wrapped round the arm: thin strips get narrower and fainter towards the sides */
-  draw(x, W, H) { const f = T.frame(W, H), d = T.design, ar = d.width / d.height; let h = f.len, w = h * ar; if (!f.free && w > f.wid * 1.9) { w = f.wid * 1.9; h = w / ar; }
-    x.save(); x.translate(f.cx, f.cy); x.rotate(f.ang); x.globalAlpha = T.opacity * (T.healed ? 0.82 : 1); x.globalCompositeOperation = 'multiply';
-    try { x.filter = T.healed ? 'blur(1.1px) saturate(.6)' : 'blur(0.35px)'; } catch (e) {}
-    const src = T.healed ? T.healedInk(d) : d;
-    if (!f.wrap || f.free) x.drawImage(src, -w / 2, -h / 2, w, h);
-    else { const span = Math.min(2.6, w / (f.wid / 2)), R = w / span, n = 40; for (let i = 0; i < n; i++) { const t0 = i / n, t1 = (i + 1) / n, a0 = (t0 - 0.5) * span, a1 = (t1 - 0.5) * span, x0 = R * Math.sin(a0), x1 = R * Math.sin(a1);
-        const fade = Math.pow(Math.cos((a0 + a1) / 2), 0.7); x.globalAlpha = T.opacity * fade * (T.healed ? 0.82 : 1); x.drawImage(src, t0 * src.width, 0, src.width / n + 1, src.height, x0, -h / 2, Math.max(0.5, x1 - x0 + 0.6), h); } }
-    x.restore(); },
-  healedInk(d) { if (T._hk && T._hk.src === d) return T._hk.c; const c = cv(d.width, d.height), x = c.getContext('2d'); x.drawImage(d, 0, 0); x.globalCompositeOperation = 'source-atop'; x.fillStyle = 'rgba(28,48,52,.55)'; x.fillRect(0, 0, c.width, c.height); T._hk = { src: d, c }; return c; },
-  /* touch: drag to move along/across the limb, pinch to resize, twist to turn */
-  wire() { const c = T.view, pts = new Map(); let g = null;
-    const toCanvas = e => { const r = c.getBoundingClientRect(), s = T.still ? Math.max(c.width / r.width, c.height / r.height) : Math.min(c.width / r.width, c.height / r.height), ox = (r.width * s - c.width) / 2, oy = (r.height * s - c.height) / 2; let x = (e.clientX - r.left) * s - ox, y = (e.clientY - r.top) * s - oy; if (T.mirror) x = c.width - x; return { x, y }; };
+  /* landmarks of this exact frame → smoothed points in video pixels */
+  detect(src, t, image) { const sp = SPOTS[T.spot]; if (!sp.need) return; const W = src.videoWidth || src.width, H = src.videoHeight || src.height, ts = image ? 0 : t / 1000; let raw = null;
+    if (sp.need === 'pose' && AI.pose) { const r = image ? AI.pose.detect(src) : AI.pose.detectForVideo(src, t); const lm = r.landmarks && r.landmarks[0];
+      if (lm) { const side = [[11, 13, 15], [12, 14, 16]].map(s => ({ s, v: s.reduce((a, i) => a + (lm[i].visibility || 0), 0) })).sort((a, b) => b.v - a.v)[0].s, [sh, elb, wr] = side.map(i => lm[i]);
+        const A = T.spot === 'forearm' ? elb : sh, B = T.spot === 'forearm' ? wr : elb; if ((A.visibility || 1) > 0.5 && (B.visibility || 1) > 0.5) raw = { A: [A.x * W, A.y * H], B: [B.x * W, B.y * H] }; } }
+    if (sp.need === 'hand' && AI.hand) { const r = image ? AI.hand.detect(src) : AI.hand.detectForVideo(src, t); const lm = r.landmarks && r.landmarks[0];
+      if (lm) raw = {}; if (lm) for (const i of [0, 5, 6, 7, 9, 17]) raw['p' + i] = [lm[i].x * W, lm[i].y * H]; }
+    if (!raw) { if (++T.lost > 8) { T.raw = null; T.F = {}; } return; } T.lost = 0;
+    for (const [k, v] of Object.entries(raw)) { const F = T.F[k] || (T.F[k] = [new Euro(), new Euro()]); raw[k] = image ? v : [F[0].f(v[0], ts), F[1].f(v[1], ts)]; }
+    T.raw = raw; },
+  /* the frame loop: copy the camera frame, find the body part in it, then draw that same frame and the ink together */
+  run() { const v = T.video, my = T.gen = (T.gen || 0) + 1; const next = () => { if (!T.L || my !== T.gen) return; if (!T.still && v.requestVideoFrameCallback) v.requestVideoFrameCallback(tick); else requestAnimationFrame(tick); };
+    const tick = () => { if (!T.L || my !== T.gen) return; next(); GL.size(); const src = T.still || (v.readyState >= 2 && v.videoWidth ? v : null); if (!src) { GL.r.render(GL.scene, GL.cam); return; }
+      const W = src.videoWidth || src.width, H = src.videoHeight || src.height, fc = GL.frameCv; if (fc.width !== W || fc.height !== H) { fc.width = W; fc.height = H; GL.ftex.dispose(); }
+      const x = fc.getContext('2d'); if (!T.still || !T._stillDrawn || T._stillDrawn !== T.still) { x.drawImage(src, 0, 0, W, H); GL.ftex.needsUpdate = true; T._stillDrawn = T.still; }
+      if (!T.still && T.ready && SPOTS[T.spot].need) { try { T.detect(fc, performance.now(), false); } catch (e) {} }
+      T.layout(W, H); GL.r.render(GL.scene, GL.cam);
+      if (!T.still && T.ready) { const sp = SPOTS[T.spot]; if (sp.need && !T.raw) T.say(sp.tip); else T.say('Locked on. Drag, pinch or twist to adjust.', true); } };
+    next(); },
+  /* where every point of the tattoo lands on screen */
+  layout(W, H) { const M = mapper(W, H), bp = GL.bg.geometry.attributes.position, c4 = [[0, 0], [W, 0], [0, H], [W, H]];
+    c4.forEach(([x, y], i) => { const [a, b] = M.to(x, y); bp.setXYZ(i, a, b, 0); }); bp.needsUpdate = true;
+    const g = GL.ink.geometry, P = g.attributes.position, Fd = g.attributes.fade, C = GL.C, R2 = GL.R, d = T.design, ar = d.width / d.height, sp = SPOTS[T.spot], raw = T.raw, cr = Math.cos(T.rot), sr = Math.sin(T.rot);
+    const um = GL.ink.material.uniforms; um.op.value = T.opacity; um.healed.value = T.healed ? 1 : 0; let put;
+    if (!sp.need || !raw) { if (sp.need && !raw && !T.still) { GL.ink.visible = false; return; } const s = Math.min(W, H) * 0.32 * T.scale, cx = W / 2 + T.off.u * W, cy = H / 2 + T.off.v * H, h = s, w = s * ar;
+      put = (u, v) => { const lx = (u - 0.5) * w, ly = (v - 0.5) * h; return [cx + lx * cr - ly * sr, cy + lx * sr + ly * cr, 1]; }; }
+    else if (T.spot === 'hand') { const p0 = raw.p0, p5 = raw.p5, p9 = raw.p9, p17 = raw.p17, hw = Math.hypot(p17[0] - p5[0], p17[1] - p5[1]), hh = Math.hypot(p9[0] - p0[0], p9[1] - p0[1]);
+      const W5 = [p0[0] + (p5[0] - p17[0]) * 0.42, p0[1] + (p5[1] - p17[1]) * 0.42], W17 = [p0[0] + (p17[0] - p5[0]) * 0.42, p0[1] + (p17[1] - p5[1]) * 0.42];
+      const bil = (s2, t2) => { const ax = p5[0] + (p17[0] - p5[0]) * s2, ay = p5[1] + (p17[1] - p5[1]) * s2, bx = W5[0] + (W17[0] - W5[0]) * s2, by = W5[1] + (W17[1] - W5[1]) * s2; return [ax + (bx - ax) * t2, ay + (by - ay) * t2]; };
+      let h = hh * sp.len * T.scale, w = h * ar; if (w > hw * 0.95 * T.scale) { w = hw * 0.95 * T.scale; h = w / ar; }
+      put = (u, v) => { const lx = (u - 0.5) * w, ly = (0.5 - v) * h, mx = lx * cr - ly * sr, my = lx * sr + ly * cr; const q = bil(0.5 + T.off.v + mx / hw, 0.42 + T.off.u - my / hh); return [q[0], q[1], 1]; }; }
+    else { let A, B, wid; if (sp.need === 'pose') { A = raw.A; B = raw.B; wid = Math.hypot(B[0] - A[0], B[1] - A[1]) * (T.spot === 'forearm' ? 0.36 : 0.44); }
+      else { const p0 = raw.p0, p9 = raw.p9, hw = Math.hypot(raw.p17[0] - raw.p5[0], raw.p17[1] - raw.p5[1]);
+        if (T.spot === 'wrist') { const dx = p0[0] - p9[0], dy = p0[1] - p9[1], L = Math.hypot(dx, dy) || 1; A = [p0[0] + dx / L * hw * 1.1, p0[1] + dy / L * hw * 1.1]; B = [p0[0] - dx / L * hw * 0.05, p0[1] - dy / L * hw * 0.05]; wid = hw * 0.92; }
+        else { A = raw.p5; B = raw.p7; wid = hw * 0.27; } }
+      const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux, Rr = wid / 2;
+      let h = L * sp.len * T.scale, w = h * ar; if (w > Math.PI * Rr * 0.9 * T.scale) { w = Math.PI * Rr * 0.9 * T.scale; h = w / ar; }
+      const along0 = L * (0.5 + T.off.u), arc0 = T.off.v * Rr;
+      // ink lies on a cylinder round the limb: across-the-arm distance is an arc, seen from the front as R·sin(angle)
+      put = (u, v) => { const lx = (u - 0.5) * w, ly = (v - 0.5) * h, ax = lx * cr - ly * sr, ay = lx * sr + ly * cr, th = (arc0 + ax) / Rr, al = along0 + ay;
+        const f = Math.cos(th); return [A[0] + ux * al + nx * Rr * Math.sin(th), A[1] + uy * al + ny * Rr * Math.sin(th), f > 0 ? Math.pow(f, 0.6) : 0]; }; }
+    for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i, q = put(i / C, j / R2), s2 = M.to(q[0], q[1]); P.setXYZ(k, s2[0], s2[1], 0); Fd.setX(k, q[2]); }
+    P.needsUpdate = true; Fd.needsUpdate = true; GL.ink.visible = true; T.lastM = M; T.lastWH = [W, H]; },
+  /* touch: drag to move along or round the limb, pinch to resize, twist to turn */
+  wire() { const c = GL.r.domElement, pts = new Map(); let g = null;
+    const toVid = e => { const r = c.getBoundingClientRect(), M = T.lastM; return M ? M.from(e.clientX - r.left, e.clientY - r.top) : { x: 0, y: 0 }; };
     const pair = () => { const [a, b] = [...pts.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x) * (T.mirror ? -1 : 1) }; };
-    c.addEventListener('pointerdown', e => { c.setPointerCapture(e.pointerId); pts.set(e.pointerId, toCanvas(e)); if (pts.size === 2) { const p = pair(); g = { two: 1, d: p.d, ang: p.ang, s: T.scale, r: T.rot }; } else g = { p: toCanvas(e), off: { ...T.off } }; });
-    c.addEventListener('pointermove', e => { if (!pts.has(e.pointerId) || !g) return; pts.set(e.pointerId, toCanvas(e));
+    c.addEventListener('pointerdown', e => { c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size === 2) { const p = pair(); g = { two: 1, d: p.d, ang: p.ang, s: T.scale, r: T.rot }; } else g = { p: toVid(e), off: { ...T.off } }; });
+    c.addEventListener('pointermove', e => { if (!pts.has(e.pointerId) || !g) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (g.two && pts.size >= 2) { const p = pair(); T.scale = Math.max(0.25, Math.min(3.5, g.s * p.d / g.d)); T.rot = g.r + (p.ang - g.ang); return; }
-      if (!g.two) { const q = toCanvas(e), dx = q.x - g.p.x, dy = q.y - g.p.y, f = T.frame(c.width, c.height), p2 = T.pts;
-        if (f.free || !p2) { T.off = { u: g.off.u + dx / c.width, v: g.off.v + dy / c.height }; return; }
-        const L = Math.hypot(p2.B.x - p2.A.x, p2.B.y - p2.A.y) || 1, ux = (p2.B.x - p2.A.x) / L, uy = (p2.B.y - p2.A.y) / L; T.off = { u: Math.max(-0.6, Math.min(0.6, g.off.u + (dx * ux + dy * uy) / L)), v: Math.max(-1, Math.min(1, g.off.v + (-dx * uy + dy * ux) / p2.wid)) }; } });
-    const up = e => { pts.delete(e.pointerId); if (pts.size < 2 && g && g.two) g = null; if (!pts.size) g = null; }; c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up); },
-  async capture() { const b = await new Promise(r => T.view.toBlob(r, 'image/jpeg', 0.92)); if (!b) return; T.L.classList.add('flash'); setTimeout(() => T.L && T.L.classList.remove('flash'), 300); await shareOrSave(b, 'tattoo-try-on.jpg'); },
-  close() { if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.stream = null; T.ready = false; if (T.L) T.L.remove(); T.L = null; T.pts = null; }
+      if (g.two) return; const q = toVid(e), dx = q.x - g.p.x, dy = q.y - g.p.y, raw = T.raw, sp = SPOTS[T.spot], [W, H] = T.lastWH || [1, 1];
+      if (!sp.need || !raw) { T.off = { u: g.off.u + dx / W, v: g.off.v + dy / H }; return; }
+      let A, B, across; if (T.spot === 'hand') { A = raw.p9; B = raw.p0; across = Math.hypot(raw.p17[0] - raw.p5[0], raw.p17[1] - raw.p5[1]); const L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1, ux = (B[0] - A[0]) / L, uy = (B[1] - A[1]) / L, sx = (raw.p17[0] - raw.p5[0]) / across, sy = (raw.p17[1] - raw.p5[1]) / across;
+        T.off = { u: Math.max(-0.6, Math.min(0.6, g.off.u + (dx * ux + dy * uy) / L)), v: Math.max(-0.5, Math.min(0.5, g.off.v + (dx * sx + dy * sy) / across)) }; return; }
+      A = raw.A || raw.p5; B = raw.B || raw.p7; if (T.spot === 'wrist') { A = raw.p0; B = raw.p9; }
+      const L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1, ux = (B[0] - A[0]) / L, uy = (B[1] - A[1]) / L, k = T.spot === 'wrist' ? -1 : 1;
+      T.off = { u: Math.max(-0.6, Math.min(0.6, g.off.u + k * (dx * ux + dy * uy) / L * (T.spot === 'wrist' ? 0.5 : 1))), v: Math.max(-1.4, Math.min(1.4, g.off.v + (-dx * uy + dy * ux) / (L * 0.2))) }; });
+    const up = e => { pts.delete(e.pointerId); if (pts.size < 2 && g && g.two) g = null; if (!pts.size) g = null; T.sizeIn.lastChild.value = Math.round(T.scale * 100); T.rotIn.lastChild.value = Math.round(T.rot * 180 / Math.PI); }; c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up); },
+  async capture() { const b = await new Promise(r => GL.r.domElement.toBlob(r, 'image/jpeg', 0.92)); if (!b) return; T.L.classList.add('flash'); setTimeout(() => T.L && T.L.classList.remove('flash'), 300); await shareOrSave(b, 'tattoo-try-on.jpg'); },
+  close() { if (T.stream) for (const t of T.stream.getTracks()) t.stop(); T.stream = null; T.ready = false; if (GL.r) { GL.r.dispose(); GL.r.domElement.remove(); GL.r = null; } if (T.L) T.L.remove(); T.L = null; T.raw = null; }
 };
 
 document.head.append(el('link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Great+Vibes&family=Playfair+Display:ital@0;1&family=Special+Elite&family=UnifrakturMaguntia&family=Montserrat:wght@300&display=swap' }));
@@ -13305,10 +13367,164 @@ document.head.append(el('style', null, `
 .tt-d.on img{border-color:var(--accent)}.tt-d.on{color:var(--fg)}
 .tt-opts{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}.tt-opts label{display:flex;align-items:center;gap:8px;font-size:.72rem;color:var(--muted)}.tt-opts label span{width:34px}.tt-opts input{flex:1;accent-color:#c9a45f;min-width:0}
 .tt-tog{display:flex;padding:3px;border-radius:99px;background:rgba(255,246,230,.07);border:1px solid var(--line)}.tt-tog button{flex:1;padding:5px 0;border-radius:99px;font-size:.74rem;color:var(--muted)}.tt-tog button.on{background:#f6f0e6;color:#111;font-weight:700}
+.tt-hide{justify-self:center;background:rgba(255,255,255,.12);color:#f3ead8;border:0;border-radius:99px;padding:5px 14px;font-size:12px}.tt-panel.mini{background:linear-gradient(0deg,rgba(10,9,8,.7) 60%,transparent)}.tt-panel.mini .tt-designs,.tt-panel.mini .tt-opts{display:none}
 .tt-shot{position:absolute;left:50%;bottom:calc(18px + var(--safe-b));transform:translateX(-50%);z-index:4;width:68px;height:68px;border-radius:50%;background:#fff;border:5px solid rgba(201,164,95,.9);box-shadow:0 0 0 4px rgba(0,0,0,.35)}
 .tt.flash:after{content:"";position:absolute;inset:0;background:#fff;opacity:.7;z-index:9;pointer-events:none}
 `));
-window.PicAliveTattoo = { open: () => T.open(), T, DESIGNS, toInk, textInk };
+window.PicAliveTattoo = { open: () => T.open(), T, GL, DESIGNS, toInk, textInk };
+})();
+</script>
+<script>(() => {
+'use strict';
+/* PicAlive live colour tools, both run on the phone with no upload:
+   - Paint my walls: tap a wall, it takes the new colour live, shadows and light stay real.
+   - Hair colour: the free MediaPipe hair model finds your hair every frame and recolours it.
+   Plus a short 3-step guide the first time each tool opens. */
+const P = window.PicAlive, { el, toast, shareOrSave } = P.U, R = window.PicAliveRoom, { svg, pickPhoto, canvasOf } = R, { THREE } = window.AREngine;
+const cv = (w, h = w) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+
+/* ───────────── first-time guide ───────────── */
+function guide(key, title, steps, force) {
+  if (!force && store.get('pa-guide-' + key)) return; store.set('pa-guide-' + key, '1');
+  const L = el('div', { class: 'pg' }), close = () => L.remove();
+  L.append(el('div', { class: 'pg-card' }, el('b', null, title), el('ol', null, ...steps.map(s => el('li', null, s))), el('button', { class: 'btn primary', onclick: close }, 'Got it')));
+  L.addEventListener('click', e => { if (e.target === L) close(); }); document.body.append(L);
+}
+window.PicAliveGuide = guide;
+
+/* ───────────── free MediaPipe loader (shared files in tv/) ───────────── */
+const AI = {};
+async function segmenter(mode) {
+  if (!AI.lib) AI.lib = await import(new URL('tv/vision_bundle.mjs', location.href).href);
+  if (!AI.fs) AI.fs = await AI.lib.FilesetResolver.forVisionTasks(new URL('tv', location.href).href);
+  if (!AI.hair) { let err; for (const delegate of ['GPU', 'CPU']) { try { AI.hair = await AI.lib.ImageSegmenter.createFromOptions(AI.fs, { baseOptions: { modelAssetPath: new URL('tv/hair_segmenter.tflite', location.href).href, delegate }, runningMode: mode, outputCategoryMask: false, outputConfidenceMasks: true }); AI.mode = mode; break; } catch (e) { err = e; } } if (!AI.hair) throw err; }
+  if (AI.mode !== mode) { await AI.hair.setOptions({ runningMode: mode }); AI.mode = mode; }
+  return AI.hair;
+}
+
+/* ───────────── one live camera screen, drawn on the GPU, the colour and the picture always from the same frame ───────────── */
+function camTool(cfg) {
+  const S = { facing: cfg.facing, still: null, mirror: false, amt: 1, col: cfg.colours[0][1] };
+  const L = el('section', { class: 'layer tt cx' }); document.body.append(L);
+  const r = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true }); r.setPixelRatio(Math.min(2, devicePixelRatio || 1)); r.domElement.className = 'tt-view'; L.append(r.domElement);
+  const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(), fc = cv(16), ftex = new THREE.CanvasTexture(fc); ftex.minFilter = THREE.LinearFilter; ftex.generateMipmaps = false;
+  let mdata = new Uint8Array(4), mtex = new THREE.DataTexture(mdata, 1, 1, THREE.RGBAFormat); mtex.minFilter = mtex.magFilter = THREE.LinearFilter; mtex.needsUpdate = true;
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12), 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 0, 0, 1, 0], 2)); g.setIndex([0, 2, 1, 2, 3, 1]);
+  const mat = new THREE.ShaderMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+    uniforms: { map: { value: ftex }, mask: { value: mtex }, col: { value: new THREE.Color() }, amt: { value: 1 }, ref: { value: 0.6 }, mode: { value: cfg.mode } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `uniform sampler2D map; uniform sampler2D mask; uniform vec3 col; uniform float amt; uniform float ref; uniform float mode; varying vec2 vUv;
+      void main(){ vec3 c = texture2D(map, vUv).rgb; float m = smoothstep(0.25, 0.75, texture2D(mask, vec2(vUv.x, 1.0 - vUv.y)).r) * amt; float l = dot(c, vec3(0.299, 0.587, 0.114)); vec3 o;
+        if (mode < 0.5) { float s = clamp(l / max(ref, 0.04), 0.0, 1.7); o = col * mix(1.0, s, 0.92); }
+        else { float h = pow(l, 0.8); o = clamp(col * (0.2 + 1.55 * h) + vec3(0.12 * h * h), 0.0, 1.0); }
+        gl_FragColor = vec4(mix(c, o, m), 1.0); }` });
+  const quad = new THREE.Mesh(g, mat); quad.frustumCulled = false; scene.add(quad);
+  let W0 = 0, H0 = 0; const size = () => { const w = r.domElement.clientWidth || innerWidth, h = r.domElement.clientHeight || innerHeight; if (w !== W0 || h !== H0) { W0 = w; H0 = h; r.setSize(w, h, false); } };
+  const map = (VW, VH) => { const k = S.still ? Math.min(W0 / VW, H0 / VH) : Math.max(W0 / VW, H0 / VH), ox = (W0 - VW * k) / 2, oy = (H0 - VH * k) / 2;
+    return { to: (x, y) => { let sx = ox + x * k; if (S.mirror) sx = W0 - sx; return [sx / W0 * 2 - 1, -((oy + y * k) / H0 * 2 - 1)]; }, from: (sx, sy) => { if (S.mirror) sx = W0 - sx; return [(sx - ox) / k / VW, (sy - oy) / k / VH]; } }; };
+  S.setMask = (data, w, h) => { if (mtex.image.width !== w || mtex.image.height !== h) { mtex.dispose(); mdata = new Uint8Array(w * h * 4); mtex = new THREE.DataTexture(mdata, w, h, THREE.RGBAFormat); mtex.minFilter = mtex.magFilter = THREE.LinearFilter; mat.uniforms.mask.value = mtex; }
+    for (let i = 0, n = w * h; i < n; i++) mdata[i * 4] = data[i]; mtex.needsUpdate = true; };
+  const video = el('video', { playsinline: true, muted: true, autoplay: true }); video.muted = true; video.setAttribute('playsinline', '');
+  const status = el('div', { class: 'tt-status' }, 'Starting camera...'); S.say = (t, ok) => { if (status.textContent !== t) status.textContent = t; status.classList.toggle('ok', !!ok); };
+  async function startCam() { if (S.stream) for (const t of S.stream.getTracks()) t.stop(); S.still = null; S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: S.facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    video.srcObject = S.stream; await video.play(); S.mirror = S.facing === 'user'; if (cfg.onSource) cfg.onSource(S); kick(); }
+  const close = () => { S.dead = true; if (S.stream) for (const t of S.stream.getTracks()) t.stop(); r.dispose(); L.remove(); };
+  let lastStill = null;
+  let gen = 0; const kick = () => { const my = ++gen; const run = () => { if (S.dead || my !== gen) return; if (!S.still && video.requestVideoFrameCallback) video.requestVideoFrameCallback(run); else requestAnimationFrame(run); tick(); }; requestAnimationFrame(run); };
+  const tick = () => { size();
+    const src = S.still || (video.readyState >= 2 && video.videoWidth ? video : null); if (!src) { r.render(scene, cam); return; }
+    const W = src.videoWidth || src.width, H = src.videoHeight || src.height; if (fc.width !== W || fc.height !== H) { fc.width = W; fc.height = H; ftex.dispose(); }
+    if (!S.still || lastStill !== S.still) { fc.getContext('2d').drawImage(src, 0, 0, W, H); ftex.needsUpdate = true; lastStill = S.still; if (S.still) S.dirty = true; }
+    if (!S.still || S.dirty) { S.dirty = false; try { cfg.frame(S, fc, performance.now()); } catch (e) { console.warn(e); } }
+    const M = S.M = map(W, H), p = g.attributes.position; [[0, 0], [W, 0], [0, H], [W, H]].forEach(([x, y], i) => { const q = M.to(x, y); p.setXYZ(i, q[0], q[1], 0); }); p.needsUpdate = true;
+    mat.uniforms.col.value.set(S.col).convertLinearToSRGB(); mat.uniforms.amt.value = S.amt; mat.uniforms.ref.value = S.ref || 0.6; r.render(scene, cam); };
+  // tap: tell the tool where (0..1 of the picture)
+  r.domElement.addEventListener('pointerup', e => { if (!S.M || !cfg.tap) return; const b = r.domElement.getBoundingClientRect(), q = S.M.from(e.clientX - b.left, e.clientY - b.top); if (q[0] >= 0 && q[0] <= 1 && q[1] >= 0 && q[1] <= 1) { cfg.tap(S, q[0], q[1]); S.dirty = true; } });
+  // panel
+  const sw = el('div', { class: 'cx-sw' }), name = el('span', { class: 'cx-name' }, cfg.colours[0][0]);
+  const pick = (n, c, b) => { S.col = c; S.dirty = true; name.textContent = n; for (const x of sw.children) x.classList.toggle('on', x === b); };
+  for (const [n, c] of cfg.colours) { const b = el('button', { 'aria-label': n, style: `background:${c}`, onclick: () => pick(n, c, b) }); sw.append(b); }
+  const own = el('input', { type: 'color', value: '#7d8f7a', oninput: e => pick('My colour', e.target.value, null) }); sw.append(el('label', { class: 'cx-own', 'aria-label': 'Any colour' }, '+', own)); sw.firstChild.classList.add('on');
+  const amt = el('label', null, el('span', null, cfg.amtLabel), el('input', { type: 'range', min: 20, max: 100, value: 100, oninput: e => { S.amt = e.target.value / 100; S.dirty = true; } }));
+  const panel = el('div', { class: 'tt-panel' }), hide = el('button', { class: 'tt-hide', onclick: () => { panel.classList.toggle('mini'); hide.textContent = panel.classList.contains('mini') ? 'Show colours' : 'Hide colours'; } }, 'Hide colours');
+  panel.append(hide, el('div', { class: 'cx-row' }, name, ...(cfg.extra ? [cfg.extra(S)] : [])), sw, el('div', { class: 'tt-opts', style: 'grid-template-columns:1fr' }, amt));
+  const top = el('div', { class: 'tt-top' }, el('button', { class: 'icon-btn', 'aria-label': 'Back', onclick: close }, svg('M15 5l-7 7 7 7')), el('b', null, cfg.title),
+    el('button', { class: 'icon-btn', 'aria-label': 'Switch camera', onclick: () => { S.facing = S.facing === 'user' ? 'environment' : 'user'; startCam().catch(() => toast('Could not switch camera')); } }, svg('M4 7h11l-3-3M20 17H9l3 3')),
+    el('button', { class: 'icon-btn', 'aria-label': 'Use a photo', onclick: async () => { const img = await pickPhoto(); if (!img) return; if (S.stream) for (const t of S.stream.getTracks()) t.stop(); S.stream = null; S.still = canvasOf(img, 1400); S.mirror = false; if (cfg.onSource) cfg.onSource(S); kick(); } }, svg('M4 4h16v16H4zM8 15l3-3 2 2 3-4 2 5')));
+  const shot = el('button', { class: 'tt-shot', 'aria-label': 'Take a photo', onclick: async () => { const b = await new Promise(res => r.domElement.toBlob(res, 'image/jpeg', 0.92)); if (b) await shareOrSave(b, cfg.file); } });
+  L.append(top, status, panel, shot); S.L = L;
+  kick();
+  startCam().catch(() => S.say('No camera here. Tap the picture button to use a photo.'));
+  guide(cfg.key, cfg.title, cfg.steps);
+  return S;
+}
+
+/* ───────────── Paint my walls: grow the wall from the tapped point, stop at edges and other colours ───────────── */
+const PAINTS = [['Sage green', '#9caf88'], ['Warm white', '#f1ebdf'], ['Greige', '#bdb3a3'], ['Terracotta', '#c0714f'], ['Clay pink', '#d3a597'], ['Olive', '#7a7a4f'], ['Forest', '#2f4a3a'], ['Navy', '#2b3a55'], ['Dusty blue', '#8ea3b5'], ['Charcoal', '#3c3d40'], ['Butter', '#ecd9a0'], ['Burgundy', '#6e2a32'], ['Lilac', '#b9a8c9'], ['Mocha', '#7b5c49']];
+function wallFill(S, fc) {
+  const seeds = S.seeds; if (!seeds.length) { S.setMask(new Uint8Array(1), 1, 1); return; }
+  const k = 200 / Math.max(fc.width, fc.height), w = Math.max(8, Math.round(fc.width * k)), h = Math.max(8, Math.round(fc.height * k));
+  const sc = S.sc || (S.sc = cv(w, h)); if (sc.width !== w || sc.height !== h) { sc.width = w; sc.height = h; } const x = sc.getContext('2d', { willReadFrequently: true });
+  x.filter = 'blur(1px)'; x.drawImage(fc, 0, 0, w, h); x.filter = 'none'; const d = x.getImageData(0, 0, w, h).data, n = w * h;
+  const L = new Float32Array(n), A = new Float32Array(n), B = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2], s = r + g + b + 1; L[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255; A[i] = r / s; B[i] = g / s; }
+  const out = new Uint8Array(n), stack = new Int32Array(n), tol = S.tol; let lsum = 0, cnt = 0;
+  for (const [u, v] of seeds) { const sx = Math.min(w - 1, Math.max(0, Math.round(u * w))), sy = Math.min(h - 1, Math.max(0, Math.round(v * h)));
+    let sa = 0, sb = 0, sl = 0, m = 0; for (let yy = -2; yy <= 2; yy++) for (let xx = -2; xx <= 2; xx++) { const X = sx + xx, Y = sy + yy; if (X < 0 || Y < 0 || X >= w || Y >= h) continue; const j = Y * w + X; sa += A[j]; sb += B[j]; sl += L[j]; m++; }
+    sa /= m; sb /= m; sl /= m; let top = 0; const s0 = sy * w + sx; if (out[s0]) continue; out[s0] = 255; stack[top++] = s0;
+    const ok = (j, i) => { if (out[j]) return false; const da = A[j] - sa, db = B[j] - sb; if (da * da + db * db > 0.0009 * tol * tol) return false; const lr = L[j] / (sl + 0.02); if (lr < 0.35 || lr > 1.9) return false; return Math.abs(L[j] - L[i]) < 0.045 * tol; };
+    while (top) { const i = stack[--top], X = i % w; lsum += L[i]; cnt++;
+      if (X > 0 && ok(i - 1, i)) { out[i - 1] = 255; stack[top++] = i - 1; } if (X < w - 1 && ok(i + 1, i)) { out[i + 1] = 255; stack[top++] = i + 1; }
+      if (i >= w && ok(i - w, i)) { out[i - w] = 255; stack[top++] = i - w; } if (i < n - w && ok(i + w, i)) { out[i + w] = 255; stack[top++] = i + w; } } }
+  // close small holes (switches, texture) and soften the edge a little
+  const o2 = new Uint8Array(n); for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const i = y * w + X; let s = 0; for (const j of [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1]) s += out[j] ? 1 : 0; o2[i] = out[i] || s >= 5 ? 255 : 0; }
+  if (S.prev && S.prev.length === n && !S.still) for (let i = 0; i < n; i++) o2[i] = (o2[i] * 0.6 + S.prev[i] * 0.4) | 0; S.prev = o2;
+  S.ref = cnt ? lsum / cnt : 0.6; S.setMask(o2, w, h);
+}
+function openPaint() {
+  const S = camTool({ key: 'paint', title: 'Paint my walls', mode: 0, facing: 'environment', file: 'wall-colour.jpg', amtLabel: 'Paint', colours: PAINTS,
+    steps: ['Point your camera at a wall, or tap the picture button to use a photo.', 'Tap the wall. It changes colour live, with the real light and shadows.', 'Pick colours below. Tap another wall to add it. Take a photo to share.'],
+    extra: S2 => { const row = el('div', { class: 'cx-mini' });
+      row.append(el('button', { onclick: () => { S2.seeds = []; S2.prev = null; S2.dirty = true; S2.say('Tap a wall to paint it'); } }, 'Clear'),
+        el('label', null, 'Edge', el('input', { type: 'range', min: 5, max: 25, value: 10, oninput: e => { S2.tol = e.target.value / 10; S2.dirty = true; } }))); return row; },
+    onSource: S2 => { S2.seeds = []; S2.prev = null; S2.say('Tap a wall to paint it'); },
+    tap: (S2, u, v) => { if (S2.seeds.length >= 4) S2.seeds.shift(); S2.seeds.push([u, v]); S2.say('Painted. Tap another wall to add it.', true); },
+    frame: (S2, fc) => wallFill(S2, fc) });
+  S.seeds = []; S.tol = 1; S.say('Tap a wall to paint it');
+}
+
+/* ───────────── Hair colour ───────────── */
+const HAIR = [['Copper', '#b5562a'], ['Honey blonde', '#c89a55'], ['Ash blonde', '#bfae8f'], ['Platinum', '#e3dccd'], ['Burgundy', '#6f1f2c'], ['Chocolate', '#4a2c20'], ['Jet black', '#141416'], ['Rose pink', '#d77a98'], ['Lilac', '#a98fd0'], ['Ocean blue', '#2f6fa8'], ['Silver', '#b7bcc4'], ['Mint', '#7fc8a9']];
+function openHair() {
+  let busy = false, ready = false;
+  const S = camTool({ key: 'hair', title: 'Hair colour', mode: 1, facing: 'user', file: 'hair-colour.jpg', amtLabel: 'Colour', colours: HAIR,
+    steps: ['Look at the camera with your hair in view, or use a photo.', 'Your hair is found on its own and coloured live as you move.', 'Pick a shade below, set how strong it is, then take a photo.'],
+    onSource: S2 => { S2.prev = null; if (AI.hair) prep(); },
+    frame: (S2, fc, t) => { if (!ready || busy) return; const seg = AI.hair, k = 320 / Math.max(fc.width, fc.height), w = Math.round(fc.width * k), h = Math.round(fc.height * k);
+      const sc = S2.sc || (S2.sc = cv(w, h)); if (sc.width !== w || sc.height !== h) { sc.width = w; sc.height = h; } sc.getContext('2d').drawImage(fc, 0, 0, w, h);
+      const res = S2.still ? seg.segment(sc) : seg.segmentForVideo(sc, t), cm = res.confidenceMasks, mk = cm && (cm[1] || cm[0]);
+      if (mk) { const f = mk.getAsFloat32Array(), mw = mk.width, mh = mk.height, n = mw * mh, o = new Uint8Array(n), pv = S2.prev && S2.prev.length === n && !S2.still ? S2.prev : null;
+        for (let i = 0; i < n; i++) { const v = f[i] * 255; o[i] = pv ? (v * 0.7 + pv[i] * 0.3) | 0 : v | 0; } S2.prev = o; S2.setMask(o, mw, mh); S2.say('Hair found. Pick a colour.', true); }
+      if (res.close) res.close(); } });
+  const prep = async () => { busy = true; if (!AI.hair) S.say('Loading hair finder (first time only)...'); try { await segmenter(S.still ? 'IMAGE' : 'VIDEO'); ready = true; S.say('Look at the camera'); } catch (e) { S.say('Hair finder could not start on this phone.'); } busy = false; S.dirty = true; };
+  prep();
+}
+
+/* tattoo gets a guide too */
+const TT = window.PicAliveTattoo; if (TT) { const o = TT.open; TT.open = () => { o(); guide('tattoo', 'Tattoo try-on', ['Pick where it goes: forearm, upper arm, wrist, back of hand or finger.', 'Show that part to the camera. The tattoo sticks to your skin as you move.', 'Pick a design, type a name or upload your own. Drag, pinch or twist to adjust.']); }; }
+
+document.head.append(el('style', null, `
+.pg{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);display:grid;place-items:center;padding:20px}
+.pg-card{background:#15120f;color:#f3ead8;border:1px solid rgba(201,164,95,.35);border-radius:20px;padding:22px 20px 18px;max-width:360px;width:100%;display:grid;gap:12px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.pg-card b{font-family:Fraunces,Georgia,serif;font-size:1.3rem;font-weight:600}.pg-card ol{margin:0;padding-left:20px;display:grid;gap:8px;line-height:1.45;color:#d9cfbd;font-size:.92rem}.pg-card .btn{justify-self:stretch}
+.cx-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.cx-name{font-weight:700;font-size:.9rem;color:#f3ead8}
+.cx-mini{display:flex;align-items:center;gap:10px;font-size:.72rem;color:var(--muted)}.cx-mini button{padding:5px 12px;border-radius:99px;border:1px solid var(--line);background:rgba(255,246,230,.06);font-size:.75rem}.cx-mini label{display:flex;align-items:center;gap:6px}.cx-mini input{width:80px;accent-color:#c9a45f}
+.cx-sw{display:flex;gap:9px;overflow-x:auto;scrollbar-width:none;padding:3px 2px}.cx-sw>*{flex:none;width:38px;height:38px;border-radius:50%;border:2px solid rgba(255,255,255,.25)}.cx-sw>.on{outline:2px solid #c9a45f;outline-offset:2px}
+.cx-own{display:grid;place-items:center;background:conic-gradient(red,orange,yellow,lime,cyan,blue,magenta,red);color:#fff;font-weight:700;position:relative;text-shadow:0 1px 2px #000}.cx-own input{position:absolute;inset:0;opacity:0;width:100%;height:100%}
+.tt-panel.mini .cx-sw,.tt-panel.mini .tt-opts,.tt-panel.mini .cx-row{display:none}
+`));
+window.PicAliveExtra = { openPaint, openHair, guide, wallFill };
 })();
 </script>
 </body>
