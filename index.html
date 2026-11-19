@@ -13209,15 +13209,28 @@ async function loadAI(kind, mode) {
   const m = AI[kind]; if (m && AI.mode[kind] !== mode) { await m.setOptions({ runningMode: mode }); AI.mode[kind] = mode; }
 }
 /* One Euro filter: steady when you hold still, no lag when you move fast */
-class Euro { constructor(minCut = 1.4, beta = 9, dCut = 1.2) { this.mc = minCut; this.b = beta; this.dc = dCut; this.x = null; this.dx = 0; this.t = 0; }
+class Euro { constructor(minCut = 0.8, beta = 4, dCut = 1) { this.mc = minCut; this.b = beta; this.dc = dCut; this.x = null; this.dx = 0; this.t = 0; }
   a(cut, dt) { const r = 2 * Math.PI * cut * dt; return r / (r + 1); }
-  f(v, t) { if (this.x === null || t - this.t > 0.5) { this.x = v; this.dx = 0; this.t = t; return v; } const dt = Math.max(1e-3, t - this.t); this.t = t; const d = (v - this.x) / dt; this.dx += this.a(this.dc, dt) * (d - this.dx);
-    const cut = this.mc + this.b * Math.abs(this.dx); this.x += this.a(cut, dt) * (v - this.x); return this.x; } }
+  // s = size of the body part in the same units, so the filter acts the same near or far from the camera
+  f(v, t, s = 1) { if (this.x === null || t - this.t > 0.5 || t <= this.t) { if (this.x === null || t - this.t > 0.5) { this.x = v; this.dx = 0; } this.t = t; return this.x; } const dt = t - this.t; this.t = t; const d = (v - this.x) / dt; this.dx += this.a(this.dc, dt) * (d - this.dx);
+    const cut = this.mc + this.b * Math.abs(this.dx) / Math.max(1e-6, s); this.x += this.a(cut, dt) * (v - this.x); return this.x; } }
+/* small vector helpers and a perspective (homography) fit for the flat back of the hand */
+const V = { sub: (a, b) => [a[0] - b[0], a[1] - b[1], (a[2] || 0) - (b[2] || 0)], dot: (a, b) => a[0] * b[0] + a[1] * b[1] + (a[2] || 0) * (b[2] || 0), cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  len: a => Math.hypot(a[0], a[1], a[2] || 0), norm: a => { const l = Math.hypot(a[0], a[1], a[2] || 0) || 1; return [a[0] / l, a[1] / l, (a[2] || 0) / l]; } };
+function fitCam(X, x) {   // least squares 2x4 camera: picture = M · [world, 1]; good for a hand or arm (small depth next to distance)
+  if (X.length < 5) return null; const A = Array.from({ length: 4 }, () => new Float64Array(6));
+  for (let i = 0; i < X.length; i++) { const r = [X[i][0], X[i][1], X[i][2], 1]; for (let j = 0; j < 4; j++) { for (let k = 0; k < 4; k++) A[j][k] += r[j] * r[k]; A[j][4] += r[j] * x[i][0]; A[j][5] += r[j] * x[i][1]; } }
+  for (let c = 0; c < 4; c++) { let pv = c; for (let r = c + 1; r < 4; r++) if (Math.abs(A[r][c]) > Math.abs(A[pv][c])) pv = r; [A[c], A[pv]] = [A[pv], A[c]]; const d = A[c][c]; if (Math.abs(d) < 1e-12) return null;
+    for (let r = 0; r < 4; r++) if (r !== c) { const f = A[r][c] / d; for (let k = c; k < 6; k++) A[r][k] -= f * A[c][k]; } }
+  const m1 = A.map((r, i) => r[4] / r[i]), m2 = A.map((r, i) => r[5] / r[i]);
+  const toCam = V.norm(V.cross(m1, m2)).map(c => -c);   // world direction pointing at the camera
+  return { p: q => [m1[0] * q[0] + m1[1] * q[1] + m1[2] * q[2] + m1[3], m2[0] * q[0] + m2[1] * q[1] + m2[2] * q[2] + m2[3]], toCam };
+}
 const SPOTS = {
   forearm: { name: 'Forearm', need: 'pose', len: 0.62, tip: 'Hold your forearm across the camera, inside facing it' },
   upper: { name: 'Upper arm', need: 'pose', len: 0.55, tip: 'Step back so your shoulder and elbow are in view' },
   wrist: { name: 'Wrist', need: 'hand', len: 0.55, tip: 'Show your hand and wrist, fingers open' },
-  hand: { name: 'Back of hand', need: 'hand', len: 0.6, tip: 'Show the back of your hand, fingers open' },
+  hand: { name: 'Back of hand', need: 'hand', len: 0.68, tip: 'Show the back of your hand, fingers open' },
   finger: { name: 'Finger', need: 'hand', len: 0.62, tip: 'Show your hand, index finger straight' },
   free: { name: 'Anywhere', need: null, len: 1, tip: 'Drag, pinch and twist to place it' } };
 
@@ -13289,16 +13302,21 @@ const T = {
     const fonts = el('div', { class: 'rm-chips' }, ...FONTS.map(([n, f], i) => el('button', { class: i ? '' : 'on', style: `font-family:${f}`, onclick: e => { font = f; for (const b of fonts.children) b.classList.toggle('on', b === e.currentTarget); } }, n)));
     const ok = await P.U.dialog({ title: 'Your tattoo text', node: el('div', null, inp, fonts), actions: [{ label: 'Cancel', value: false }, { label: 'Try it on', kind: 'primary', value: true }] });
     if (!ok || !inp.value.trim()) return; try { await document.fonts.load(`64px ${font}`); } catch (e) {} T.setDesign(textInk(inp.value.trim(), font), 'text'); T.fillDesigns(); },
-  /* landmarks of this exact frame → smoothed points in video pixels */
-  detect(src, t, image) { const sp = SPOTS[T.spot]; if (!sp.need) return; const W = src.videoWidth || src.width, H = src.videoHeight || src.height, ts = image ? 0 : t / 1000; let raw = null;
-    if (sp.need === 'pose' && AI.pose) { const r = image ? AI.pose.detect(src) : AI.pose.detectForVideo(src, t); const lm = r.landmarks && r.landmarks[0];
-      if (lm) { const side = [[11, 13, 15], [12, 14, 16]].map(s => ({ s, v: s.reduce((a, i) => a + (lm[i].visibility || 0), 0) })).sort((a, b) => b.v - a.v)[0].s, [sh, elb, wr] = side.map(i => lm[i]);
-        const A = T.spot === 'forearm' ? elb : sh, B = T.spot === 'forearm' ? wr : elb; if ((A.visibility || 1) > 0.5 && (B.visibility || 1) > 0.5) raw = { A: [A.x * W, A.y * H], B: [B.x * W, B.y * H] }; } }
-    if (sp.need === 'hand' && AI.hand) { const r = image ? AI.hand.detect(src) : AI.hand.detectForVideo(src, t); const lm = r.landmarks && r.landmarks[0];
-      if (lm) raw = {}; if (lm) for (const i of [0, 5, 6, 7, 9, 17]) raw['p' + i] = [lm[i].x * W, lm[i].y * H]; }
-    if (!raw) { if (++T.lost > 8) { T.raw = null; T.F = {}; } return; } T.lost = 0;
-    for (const [k, v] of Object.entries(raw)) { const F = T.F[k] || (T.F[k] = [new Euro(), new Euro()]); raw[k] = image ? v : [F[0].f(v[0], ts), F[1].f(v[1], ts)]; }
-    T.raw = raw; },
+  /* landmarks of this exact frame → smoothed picture points (pixels) and 3D points (metres) */
+  detect(src, t, image) { const sp = SPOTS[T.spot]; if (!sp.need) return; const W = src.videoWidth || src.width, H = src.videoHeight || src.height, ts = image ? 0 : t / 1000; let lm, wl, keys, sz = 1, wsz = 0.08, extra = {};
+    if (sp.need === 'pose' && AI.pose) { const r = image ? AI.pose.detect(src) : AI.pose.detectForVideo(src, t); lm = r.landmarks && r.landmarks[0]; wl = r.worldLandmarks && r.worldLandmarks[0];
+      if (lm) { const side = [[11, 13, 15], [12, 14, 16]].map(s2 => ({ s: s2, v: s2.reduce((a2, i) => a2 + (lm[i].visibility || 0), 0) })).sort((x, y) => y.v - x.v)[0].s;
+        const [ia, ib] = T.spot === 'forearm' ? [side[1], side[2]] : [side[0], side[1]]; if (!((lm[ia].visibility ?? 1) > 0.5 && (lm[ib].visibility ?? 1) > 0.5)) lm = null; else { extra = { ia, ib }; keys = [...Array(33).keys()].filter(i => i > 10 && (lm[i].visibility ?? 1) > 0.6 || i === ia || i === ib); } } }
+    if (sp.need === 'hand' && AI.hand) { const r = image ? AI.hand.detect(src) : AI.hand.detectForVideo(src, t); lm = r.landmarks && r.landmarks[0]; wl = r.worldLandmarks && r.worldLandmarks[0]; keys = [...Array(21).keys()]; }
+    if (!lm) { if (++T.lost > 8) { T.raw = null; T.cam = null; T.F = {}; } return; } T.lost = 0;
+    const raw = {}, world = {}; for (const i of keys) { raw[i] = [lm[i].x * W, lm[i].y * H]; if (wl) world[i] = [wl[i].x, wl[i].y, wl[i].z]; }
+    if (sp.need === 'hand') { sz = Math.hypot(raw[17][0] - raw[5][0], raw[17][1] - raw[5][1]) || 1; if (wl) wsz = V.len(V.sub(world[17], world[5])) || 0.07; }
+    else { sz = Math.hypot(raw[extra.ib][0] - raw[extra.ia][0], raw[extra.ib][1] - raw[extra.ia][1]) || 1; if (wl) wsz = V.len(V.sub(world[extra.ib], world[extra.ia])) || 0.25; }
+    if (!image && !T.noFilter) { for (const k of keys) { const F = T.F[k] || (T.F[k] = [new Euro(), new Euro()]); raw[k] = [F[0].f(raw[k][0], ts, sz), F[1].f(raw[k][1], ts, sz)];
+      if (wl) { const G = T.F['w' + k] || (T.F['w' + k] = [new Euro(), new Euro(), new Euro()]); world[k] = world[k].map((c, j) => G[j].f(c, ts, wsz)); } } }
+    // names the drawing code uses
+    if (sp.need === 'hand') for (const i of [0, 5, 6, 7, 9, 13, 17]) raw['p' + i] = raw[i]; else { raw.A = raw[extra.ia]; raw.B = raw[extra.ib]; }
+    T.raw = raw; T.world = wl ? world : null; T.ex = extra; T.cam = wl ? fitCam(keys.map(k => world[k]), keys.map(k => raw[k])) : null; },
   /* the frame loop: copy the camera frame, find the body part in it, then draw that same frame and the ink together */
   run() { const v = T.video, my = T.gen = (T.gen || 0) + 1; const next = () => { if (!T.L || my !== T.gen) return; if (!T.still && v.requestVideoFrameCallback) v.requestVideoFrameCallback(tick); else requestAnimationFrame(tick); };
     const tick = () => { if (!T.L || my !== T.gen) return; next(); GL.size(); const src = T.still || (v.readyState >= 2 && v.videoWidth ? v : null); if (!src) { GL.r.render(GL.scene, GL.cam); return; }
@@ -13315,16 +13333,41 @@ const T = {
     const um = GL.ink.material.uniforms; um.op.value = T.opacity; um.healed.value = T.healed ? 1 : 0; let put;
     if (!sp.need || !raw) { if (sp.need && !raw && !T.still) { GL.ink.visible = false; return; } const s = Math.min(W, H) * 0.32 * T.scale, cx = W / 2 + T.off.u * W, cy = H / 2 + T.off.v * H, h = s, w = s * ar;
       put = (u, v) => { const lx = (u - 0.5) * w, ly = (v - 0.5) * h; return [cx + lx * cr - ly * sr, cy + lx * sr + ly * cr, 1]; }; }
-    else if (T.spot === 'hand') { const p0 = raw.p0, p5 = raw.p5, p9 = raw.p9, p17 = raw.p17, hw = Math.hypot(p17[0] - p5[0], p17[1] - p5[1]), hh = Math.hypot(p9[0] - p0[0], p9[1] - p0[1]);
+    else if (T.spot === 'hand' && T.cam) { const w = T.world, cam = T.cam;
+      // back of the hand as a gently curved surface in 3D, seen through the fitted camera: true tilt and perspective
+      let n = V.norm(V.cross(V.sub(w[5], w[0]), V.sub(w[17], w[0]))); if (V.dot(n, cam.toCam) < 0) n = n.map(c => -c);
+      const K = [0, 1, 2].map(i => (w[5][i] + w[17][i]) / 2), up0 = V.sub(K, w[0]), along = V.norm(V.sub(up0, n.map(c => c * V.dot(up0, n))));
+      let across = V.cross(n, along); const acr = V.sub(w[17], w[5]), hwm = V.len(acr), hl = V.len(up0), f = 0.5 - T.off.u;
+      const c0 = [0, 1, 2].map(i => w[0][i] + up0[i] * f + acr[i] * T.off.v);
+      { const o = cam.p(c0), ax = cam.p(V.sub(c0, across.map(c => -0.01 * c))), ay = cam.p(c0.map((c, i) => c - 0.01 * along[i])); if ((ax[0] - o[0]) * (ay[1] - o[1]) - (ax[1] - o[1]) * (ay[0] - o[0]) < 0) across = across.map(c => -c); }
+      let h = hl * sp.len * T.scale, wd = h * ar; if (wd > hwm * 0.9 * T.scale) { wd = hwm * 0.9 * T.scale; h = wd / ar; }
+      put = (u, v) => { const lx = (u - 0.5) * wd, ly = (v - 0.5) * h, mx = lx * cr - ly * sr, my = lx * sr + ly * cr, bend = (mx * mx) / (2 * 0.09);
+        const q = cam.p([0, 1, 2].map(i => c0[i] + across[i] * mx - along[i] * my - n[i] * bend)); return [q[0], q[1], 1]; }; }
+    if (!put && T.spot === 'hand') { const p0 = raw.p0, p5 = raw.p5, p9 = raw.p9, p17 = raw.p17, hw = Math.hypot(p17[0] - p5[0], p17[1] - p5[1]), hh = Math.hypot(p9[0] - p0[0], p9[1] - p0[1]);
       const W5 = [p0[0] + (p5[0] - p17[0]) * 0.42, p0[1] + (p5[1] - p17[1]) * 0.42], W17 = [p0[0] + (p17[0] - p5[0]) * 0.42, p0[1] + (p17[1] - p5[1]) * 0.42];
       const bil = (s2, t2) => { const ax = p5[0] + (p17[0] - p5[0]) * s2, ay = p5[1] + (p17[1] - p5[1]) * s2, bx = W5[0] + (W17[0] - W5[0]) * s2, by = W5[1] + (W17[1] - W5[1]) * s2; return [ax + (bx - ax) * t2, ay + (by - ay) * t2]; };
       let h = hh * sp.len * T.scale, w = h * ar; if (w > hw * 0.95 * T.scale) { w = hw * 0.95 * T.scale; h = w / ar; }
-      put = (u, v) => { const lx = (u - 0.5) * w, ly = (0.5 - v) * h, mx = lx * cr - ly * sr, my = lx * sr + ly * cr; const q = bil(0.5 + T.off.v + mx / hw, 0.42 + T.off.u - my / hh); return [q[0], q[1], 1]; }; }
-    else { let A, B, wid; if (sp.need === 'pose') { A = raw.A; B = raw.B; wid = Math.hypot(B[0] - A[0], B[1] - A[1]) * (T.spot === 'forearm' ? 0.36 : 0.44); }
+      put = (u, v) => { const lx = (u - 0.5) * w, ly = (0.5 - v) * h, mx = lx * cr - ly * sr, my = lx * sr + ly * cr; const q = bil(0.5 + T.off.v + mx / hw, 0.5 + T.off.u - my / hh); return [q[0], q[1], 1]; }; }
+    if (!put && T.cam) { const w = T.world, cam = T.cam; let A3, B3, R;
+      if (sp.need === 'pose') { A3 = w[T.ex.ia]; B3 = w[T.ex.ib]; R = T.spot === 'forearm' ? 0.034 : 0.045; }
+      else if (T.spot === 'wrist') { const d = V.norm(V.sub(w[0], w[9])); A3 = w[0].map((c, i) => c + d[i] * 0.07); B3 = w[0].map((c, i) => c - d[i] * 0.004); R = 0.028; }
+      else { A3 = w[5]; B3 = w[7]; R = 0.0095; }
+      const ax = V.sub(B3, A3), Lm = V.len(ax) || 0.01, ua = ax.map(c => c / Lm), tc = cam.toCam, vv = V.norm(V.sub(tc, ua.map(c => c * V.dot(tc, ua)))); let sd = V.cross(ua, vv);
+      { const o = cam.p(A3), p1 = cam.p(A3.map((c, i) => c + sd[i] * 0.01)), p2 = cam.p(A3.map((c, i) => c + ua[i] * 0.01)); if ((p1[0] - o[0]) * (p2[1] - o[1]) - (p1[1] - o[1]) * (p2[0] - o[0]) < 0) sd = sd.map(c => -c); }
+      let h = Lm * sp.len * T.scale, wd = h * ar; if (wd > Math.PI * R * 0.9 * T.scale) { wd = Math.PI * R * 0.9 * T.scale; h = wd / ar; }
+      const al0 = Lm * (0.5 + T.off.u), arc0 = T.off.v * R;
+      // the ink lies on a real cylinder round the arm: it curves away at the sides and fades there
+      put = (u, v) => { const lx = (u - 0.5) * wd, ly = (v - 0.5) * h, ax2 = lx * cr - ly * sr, ay2 = lx * sr + ly * cr, th = (arc0 + ax2) / R, al = al0 + ay2, ct = Math.cos(th), st = Math.sin(th);
+        const q = cam.p([0, 1, 2].map(i => A3[i] + ua[i] * al + R * (vv[i] * ct + sd[i] * st))); return [q[0], q[1], ct > 0 ? Math.pow(ct, 0.6) : 0]; }; }
+    if (!put) { let A, B, Rr, wl = null, ppm = 0, Lm = 0;
+      if (sp.need === 'pose') { A = raw.A; B = raw.B; const L2 = Math.hypot(B[0] - A[0], B[1] - A[1]);
+        if (wl) { const d = V.sub(wl.B, wl.A); Lm = V.len(d); ppm = L2 / Math.max(Math.hypot(d[0], d[1]), 0.35 * Lm); }   // pixels per metre across the arm
+        Rr = ppm ? (T.spot === 'forearm' ? 0.034 : 0.045) * ppm : L2 * (T.spot === 'forearm' ? 0.18 : 0.22); }
       else { const p0 = raw.p0, p9 = raw.p9, hw = Math.hypot(raw.p17[0] - raw.p5[0], raw.p17[1] - raw.p5[1]);
-        if (T.spot === 'wrist') { const dx = p0[0] - p9[0], dy = p0[1] - p9[1], L = Math.hypot(dx, dy) || 1; A = [p0[0] + dx / L * hw * 1.1, p0[1] + dy / L * hw * 1.1]; B = [p0[0] - dx / L * hw * 0.05, p0[1] - dy / L * hw * 0.05]; wid = hw * 0.92; }
-        else { A = raw.p5; B = raw.p7; wid = hw * 0.27; } }
-      const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux, Rr = wid / 2;
+        if (wl) { const d = V.sub(wl.p17, wl.p5); ppm = hw / Math.max(Math.hypot(d[0], d[1]), 0.35 * V.len(d)); }
+        if (T.spot === 'wrist') { const dx = p0[0] - p9[0], dy = p0[1] - p9[1], L = Math.hypot(dx, dy) || 1; A = [p0[0] + dx / L * hw * 1.1, p0[1] + dy / L * hw * 1.1]; B = [p0[0] - dx / L * hw * 0.05, p0[1] - dy / L * hw * 0.05]; Rr = ppm ? 0.028 * ppm : hw * 0.46; }
+        else { A = raw.p5; B = raw.p7; Rr = ppm ? 0.0095 * ppm : hw * 0.135; } }
+      const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
       let h = L * sp.len * T.scale, w = h * ar; if (w > Math.PI * Rr * 0.9 * T.scale) { w = Math.PI * Rr * 0.9 * T.scale; h = w / ar; }
       const along0 = L * (0.5 + T.off.u), arc0 = T.off.v * Rr;
       // ink lies on a cylinder round the limb: across-the-arm distance is an arc, seen from the front as R·sin(angle)
@@ -13399,7 +13442,9 @@ async function segmenter(mode) {
   if (!AI.lib) AI.lib = await import(new URL('tv/vision_bundle.mjs', location.href).href);
   if (!AI.fs) AI.fs = await AI.lib.FilesetResolver.forVisionTasks(new URL('tv', location.href).href);
   if (!AI.hair) { let err; for (const delegate of ['GPU', 'CPU']) { try { AI.hair = await AI.lib.ImageSegmenter.createFromOptions(AI.fs, { baseOptions: { modelAssetPath: new URL('tv/hair_segmenter.tflite', location.href).href, delegate }, runningMode: mode, outputCategoryMask: false, outputConfidenceMasks: true }); AI.mode = mode; break; } catch (e) { err = e; } } if (!AI.hair) throw err; }
+  if (!AI.face) { for (const delegate of ['GPU', 'CPU']) { try { AI.face = await AI.lib.FaceDetector.createFromOptions(AI.fs, { baseOptions: { modelAssetPath: new URL('tv/face_detector.tflite', location.href).href, delegate }, runningMode: mode, minDetectionConfidence: 0.5 }); AI.fmode = mode; break; } catch (e) {} } }
   if (AI.mode !== mode) { await AI.hair.setOptions({ runningMode: mode }); AI.mode = mode; }
+  if (AI.face && AI.fmode !== mode) { await AI.face.setOptions({ runningMode: mode }); AI.fmode = mode; }
   return AI.hair;
 }
 
@@ -13412,13 +13457,19 @@ function camTool(cfg) {
   let mdata = new Uint8Array(4), mtex = new THREE.DataTexture(mdata, 1, 1, THREE.RGBAFormat); mtex.minFilter = mtex.magFilter = THREE.LinearFilter; mtex.needsUpdate = true;
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12), 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 0, 0, 1, 0], 2)); g.setIndex([0, 2, 1, 2, 3, 1]);
   const mat = new THREE.ShaderMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false,
-    uniforms: { map: { value: ftex }, mask: { value: mtex }, col: { value: new THREE.Color() }, amt: { value: 1 }, ref: { value: 0.6 }, mode: { value: cfg.mode } },
+    uniforms: { map: { value: ftex }, mask: { value: mtex }, col: { value: new THREE.Color() }, refc: { value: new THREE.Vector3(0.6, 0.6, 0.6) }, amt: { value: 1 }, ref: { value: 0.6 }, tol: { value: 1 }, mode: { value: cfg.mode } },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
-    fragmentShader: `uniform sampler2D map; uniform sampler2D mask; uniform vec3 col; uniform float amt; uniform float ref; uniform float mode; varying vec2 vUv;
-      void main(){ vec3 c = texture2D(map, vUv).rgb; float m = smoothstep(0.25, 0.75, texture2D(mask, vec2(vUv.x, 1.0 - vUv.y)).r) * amt; float l = dot(c, vec3(0.299, 0.587, 0.114)); vec3 o;
-        if (mode < 0.5) { float s = clamp(l / max(ref, 0.04), 0.0, 1.7); o = col * mix(1.0, s, 0.92); }
-        else { float h = pow(l, 0.8); o = clamp(col * (0.2 + 1.55 * h) + vec3(0.12 * h * h), 0.0, 1.0); }
-        gl_FragColor = vec4(mix(c, o, m), 1.0); }` });
+    // the low-res mask says roughly where; each full-detail pixel is then checked against the wall's (or hair's) own colour, so edges are sharp and nothing spills
+    fragmentShader: `uniform sampler2D map; uniform sampler2D mask; uniform vec3 col; uniform vec3 refc; uniform float amt; uniform float ref; uniform float tol; uniform float mode; varying vec2 vUv;
+      vec3 chroma(vec3 c){ return c / (c.r + c.g + c.b + 0.03); }
+      void main(){ vec3 c = texture2D(map, vUv).rgb; float m0 = texture2D(mask, vec2(vUv.x, 1.0 - vUv.y)).r, l = dot(c, vec3(0.299, 0.587, 0.114));
+        float dc = length(chroma(c) - chroma(refc)), lr = l / max(ref, 0.03), m; vec3 o;
+        if (mode < 0.5) { float sim = (1.0 - smoothstep(0.022 * tol, 0.05 * tol, dc)) * smoothstep(0.2, 0.36, lr) * (1.0 - smoothstep(1.6, 2.1, lr));
+          m = smoothstep(0.2, 0.65, m0) * sim; o = col * clamp(lr, 0.0, 1.6); }
+        else { float sim = (1.0 - smoothstep(1.6, 2.6, lr)) * (1.0 - smoothstep(0.045, 0.1, dc));
+          m = smoothstep(0.12, 0.7, m0) * mix(1.0, sim, 0.8) * 0.92;
+          o = col * clamp(lr, 0.0, 2.4) + vec3(max(l - ref * 1.7, 0.0) * 0.6); o = clamp(o, 0.0, 1.0); }
+        gl_FragColor = vec4(mix(c, o, m * amt), 1.0); }` });
   const quad = new THREE.Mesh(g, mat); quad.frustumCulled = false; scene.add(quad);
   let W0 = 0, H0 = 0; const size = () => { const w = r.domElement.clientWidth || innerWidth, h = r.domElement.clientHeight || innerHeight; if (w !== W0 || h !== H0) { W0 = w; H0 = h; r.setSize(w, h, false); } };
   const map = (VW, VH) => { const k = S.still ? Math.min(W0 / VW, H0 / VH) : Math.max(W0 / VW, H0 / VH), ox = (W0 - VW * k) / 2, oy = (H0 - VH * k) / 2;
@@ -13438,7 +13489,7 @@ function camTool(cfg) {
     if (!S.still || lastStill !== S.still) { fc.getContext('2d').drawImage(src, 0, 0, W, H); ftex.needsUpdate = true; lastStill = S.still; if (S.still) S.dirty = true; }
     if (!S.still || S.dirty) { S.dirty = false; try { cfg.frame(S, fc, performance.now()); } catch (e) { console.warn(e); } }
     const M = S.M = map(W, H), p = g.attributes.position; [[0, 0], [W, 0], [0, H], [W, H]].forEach(([x, y], i) => { const q = M.to(x, y); p.setXYZ(i, q[0], q[1], 0); }); p.needsUpdate = true;
-    mat.uniforms.col.value.set(S.col).convertLinearToSRGB(); mat.uniforms.amt.value = S.amt; mat.uniforms.ref.value = S.ref || 0.6; r.render(scene, cam); };
+    mat.uniforms.col.value.set(S.col).convertLinearToSRGB(); mat.uniforms.amt.value = S.amt; mat.uniforms.ref.value = S.ref || 0.6; if (S.refc) mat.uniforms.refc.value.set(S.refc[0], S.refc[1], S.refc[2]); mat.uniforms.tol.value = S.tol || 1; r.render(scene, cam); };
   // tap: tell the tool where (0..1 of the picture)
   r.domElement.addEventListener('pointerup', e => { if (!S.M || !cfg.tap) return; const b = r.domElement.getBoundingClientRect(), q = S.M.from(e.clientX - b.left, e.clientY - b.top); if (q[0] >= 0 && q[0] <= 1 && q[1] >= 0 && q[1] <= 1) { cfg.tap(S, q[0], q[1]); S.dirty = true; } });
   // panel
@@ -13464,23 +13515,28 @@ function camTool(cfg) {
 const PAINTS = [['Sage green', '#9caf88'], ['Warm white', '#f1ebdf'], ['Greige', '#bdb3a3'], ['Terracotta', '#c0714f'], ['Clay pink', '#d3a597'], ['Olive', '#7a7a4f'], ['Forest', '#2f4a3a'], ['Navy', '#2b3a55'], ['Dusty blue', '#8ea3b5'], ['Charcoal', '#3c3d40'], ['Butter', '#ecd9a0'], ['Burgundy', '#6e2a32'], ['Lilac', '#b9a8c9'], ['Mocha', '#7b5c49']];
 function wallFill(S, fc) {
   const seeds = S.seeds; if (!seeds.length) { S.setMask(new Uint8Array(1), 1, 1); return; }
-  const k = 200 / Math.max(fc.width, fc.height), w = Math.max(8, Math.round(fc.width * k)), h = Math.max(8, Math.round(fc.height * k));
+  const k = 256 / Math.max(fc.width, fc.height), w = Math.max(8, Math.round(fc.width * k)), h = Math.max(8, Math.round(fc.height * k));
   const sc = S.sc || (S.sc = cv(w, h)); if (sc.width !== w || sc.height !== h) { sc.width = w; sc.height = h; } const x = sc.getContext('2d', { willReadFrequently: true });
-  x.filter = 'blur(1px)'; x.drawImage(fc, 0, 0, w, h); x.filter = 'none'; const d = x.getImageData(0, 0, w, h).data, n = w * h;
+  x.drawImage(fc, 0, 0, w, h); const d = x.getImageData(0, 0, w, h).data, n = w * h;
   const L = new Float32Array(n), A = new Float32Array(n), B = new Float32Array(n);
-  for (let i = 0; i < n; i++) { const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2], s = r + g + b + 1; L[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255; A[i] = r / s; B[i] = g / s; }
-  const out = new Uint8Array(n), stack = new Int32Array(n), tol = S.tol; let lsum = 0, cnt = 0;
-  for (const [u, v] of seeds) { const sx = Math.min(w - 1, Math.max(0, Math.round(u * w))), sy = Math.min(h - 1, Math.max(0, Math.round(v * h)));
+  for (let i = 0; i < n; i++) { const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2], s2 = r + g + b + 8; L[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255; A[i] = r / s2; B[i] = g / s2; }
+  // edges: Sobel on light and on colour; strong edges (AC, frames, ceiling line, curtains) are walls the paint cannot cross
+  const E = new Uint8Array(n), et = 0.085 * S.tol;
+  for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const i = y * w + X;
+    const g = q => { const gx = q[i - w + 1] + 2 * q[i + 1] + q[i + w + 1] - q[i - w - 1] - 2 * q[i - 1] - q[i + w - 1], gy = q[i + w - 1] + 2 * q[i + w] + q[i + w + 1] - q[i - w - 1] - 2 * q[i - w] - q[i - w + 1]; return Math.hypot(gx, gy) / 4; };
+    if (g(L) / (0.25 + L[i]) > et || (g(A) + g(B)) * 4 > et) E[i] = 1; }
+  const out = new Uint8Array(n), stack = new Int32Array(n), tol = S.tol; let lsum = 0, cnt = 0, rs = 0, gs = 0, bs = 0;
+  for (const [u, v] of seeds) { const sx = Math.min(w - 2, Math.max(1, Math.round(u * w))), sy = Math.min(h - 2, Math.max(1, Math.round(v * h)));
     let sa = 0, sb = 0, sl = 0, m = 0; for (let yy = -2; yy <= 2; yy++) for (let xx = -2; xx <= 2; xx++) { const X = sx + xx, Y = sy + yy; if (X < 0 || Y < 0 || X >= w || Y >= h) continue; const j = Y * w + X; sa += A[j]; sb += B[j]; sl += L[j]; m++; }
     sa /= m; sb /= m; sl /= m; let top = 0; const s0 = sy * w + sx; if (out[s0]) continue; out[s0] = 255; stack[top++] = s0;
-    const ok = (j, i) => { if (out[j]) return false; const da = A[j] - sa, db = B[j] - sb; if (da * da + db * db > 0.0009 * tol * tol) return false; const lr = L[j] / (sl + 0.02); if (lr < 0.35 || lr > 1.9) return false; return Math.abs(L[j] - L[i]) < 0.045 * tol; };
-    while (top) { const i = stack[--top], X = i % w; lsum += L[i]; cnt++;
+    const ok = (j, i) => { if (out[j] || E[j]) return false; const da = A[j] - sa, db = B[j] - sb; if (da * da + db * db > 0.0006 * tol * tol) return false; const lr = L[j] / (sl + 0.02); if (lr < 0.4 || lr > 1.7) return false; return Math.abs(L[j] - L[i]) < 0.03 * tol; };
+    while (top) { const i = stack[--top], X = i % w; lsum += L[i]; cnt++; rs += d[i * 4]; gs += d[i * 4 + 1]; bs += d[i * 4 + 2];
       if (X > 0 && ok(i - 1, i)) { out[i - 1] = 255; stack[top++] = i - 1; } if (X < w - 1 && ok(i + 1, i)) { out[i + 1] = 255; stack[top++] = i + 1; }
       if (i >= w && ok(i - w, i)) { out[i - w] = 255; stack[top++] = i - w; } if (i < n - w && ok(i + w, i)) { out[i + w] = 255; stack[top++] = i + w; } } }
-  // close small holes (switches, texture) and soften the edge a little
-  const o2 = new Uint8Array(n); for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const i = y * w + X; let s = 0; for (const j of [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1]) s += out[j] ? 1 : 0; o2[i] = out[i] || s >= 5 ? 255 : 0; }
+  // the edge pixels themselves belong to the wall when most neighbours do (the full-detail check in the shader trims them)
+  const o2 = new Uint8Array(n); for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const i = y * w + X; let s2 = 0; for (const j of [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1]) s2 += out[j] ? 1 : 0; o2[i] = out[i] || s2 >= 4 ? 255 : 0; }
   if (S.prev && S.prev.length === n && !S.still) for (let i = 0; i < n; i++) o2[i] = (o2[i] * 0.6 + S.prev[i] * 0.4) | 0; S.prev = o2;
-  S.ref = cnt ? lsum / cnt : 0.6; S.setMask(o2, w, h);
+  S.ref = cnt ? lsum / cnt : 0.6; if (cnt) S.refc = [rs / cnt / 255, gs / cnt / 255, bs / cnt / 255]; S.setMask(o2, w, h);
 }
 function openPaint() {
   const S = camTool({ key: 'paint', title: 'Paint my walls', mode: 0, facing: 'environment', file: 'wall-colour.jpg', amtLabel: 'Paint', colours: PAINTS,
@@ -13504,8 +13560,15 @@ function openHair() {
     frame: (S2, fc, t) => { if (!ready || busy) return; const seg = AI.hair, k = 320 / Math.max(fc.width, fc.height), w = Math.round(fc.width * k), h = Math.round(fc.height * k);
       const sc = S2.sc || (S2.sc = cv(w, h)); if (sc.width !== w || sc.height !== h) { sc.width = w; sc.height = h; } sc.getContext('2d').drawImage(fc, 0, 0, w, h);
       const res = S2.still ? seg.segment(sc) : seg.segmentForVideo(sc, t), cm = res.confidenceMasks, mk = cm && (cm[1] || cm[0]);
+      // hair only counts near a face: the hair finder alone can mistake clothes or dark things for hair
+      let fb = null; if (AI.face) { const fr = S2.still ? AI.face.detect(sc) : AI.face.detectForVideo(sc, t), dd = fr.detections && fr.detections.sort((a2, b2) => b2.boundingBox.width - a2.boundingBox.width)[0]; if (dd) fb = dd.boundingBox; }
+      if (AI.face && !fb) { if (++S2.noFace > 6) { S2.prev = null; S2.setMask(new Uint8Array(1), 1, 1); S2.say('Bring your face into view'); } if (res.close) res.close(); return; } S2.noFace = 0;
       if (mk) { const f = mk.getAsFloat32Array(), mw = mk.width, mh = mk.height, n = mw * mh, o = new Uint8Array(n), pv = S2.prev && S2.prev.length === n && !S2.still ? S2.prev : null;
-        for (let i = 0; i < n; i++) { const v = f[i] * 255; o[i] = pv ? (v * 0.7 + pv[i] * 0.3) | 0 : v | 0; } S2.prev = o; S2.setMask(o, mw, mh); S2.say('Hair found. Pick a colour.', true); }
+        if (fb) { const sxk = mw / w, syk = mh / h, cx = (fb.originX + fb.width / 2) * sxk, cy = (fb.originY + fb.height * 0.45) * syk, rx = fb.width * 1.35 * sxk, ryU = fb.height * 1.5 * syk, ryD = fb.height * 2.4 * syk;
+          for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) { const dx = (x - cx) / rx, dy = (y - cy) / (y < cy ? ryU : ryD), r = dx * dx + dy * dy; if (r > 1) f[y * mw + x] *= Math.max(0, 1 - (r - 1) * 3); } }
+        for (let i = 0; i < n; i++) { const v = f[i] * 255; o[i] = pv ? (v * 0.7 + pv[i] * 0.3) | 0 : v | 0; } S2.prev = o; S2.setMask(o, mw, mh);
+        if (mw === w && mh === h) { const px = sc.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data; let ws = 0, r = 0, g2 = 0, b = 0; for (let i = 0; i < n; i++) { const q = f[i] * f[i]; if (q < 0.25) continue; ws += q; r += px[i * 4] * q; g2 += px[i * 4 + 1] * q; b += px[i * 4 + 2] * q; }
+          if (ws > 20) { const rc = [r / ws / 255, g2 / ws / 255, b / ws / 255], pr = S2.refc; S2.refc = pr && !S2.still ? pr.map((c, i) => c * 0.8 + rc[i] * 0.2) : rc; S2.ref = 0.299 * S2.refc[0] + 0.587 * S2.refc[1] + 0.114 * S2.refc[2]; } } S2.say('Hair found. Pick a colour.', true); }
       if (res.close) res.close(); } });
   const prep = async () => { busy = true; if (!AI.hair) S.say('Loading hair finder (first time only)...'); try { await segmenter(S.still ? 'IMAGE' : 'VIDEO'); ready = true; S.say('Look at the camera'); } catch (e) { S.say('Hair finder could not start on this phone.'); } busy = false; S.dirty = true; };
   prep();
