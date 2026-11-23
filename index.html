@@ -13422,7 +13422,7 @@ const BUG = {
     return { g, legs, palps, thorax, abdomen }; },
   placeSeg(m, a, b) { const d = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]), L = d.length() || 1e-6; m.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
     m.quaternion.setFromUnitVectors(BUG._up || (BUG._up = new THREE.Vector3(0, 1, 0)), d.divideScalar(L)); m.scale.set(m.userData.r, L, m.userData.r); },
-  reset() { BUG.phase = 'walk'; BUG.t = 0; BUG.pos = null; BUG.head = 0; BUG.gait = 0; BUG.speed = 0; BUG.fade = 0; BUG.inkOp = 0; BUG.cov = 0; BUG.target = null; BUG.pause = 0.6; if (BUG.btn) BUG.btn.textContent = 'Turn into tattoo'; },
+  reset() { BUG.last = null; BUG.phase = 'walk'; BUG.t = 0; BUG.pos = null; BUG.head = 0; BUG.gait = 0; BUG.speed = 0; BUG.fade = 0; BUG.inkOp = 0; BUG.cov = 0; BUG.target = null; BUG.pause = 0.6; if (BUG.btn) BUG.btn.textContent = 'Turn into tattoo'; },
   // the skin patch's frame, in lock-frame pixels: centre, right and down directions, and size
   frame(lk) { const G = lk.G0, C = GL.C, R2 = GL.R, P = (i, j) => [G[(j * (C + 1) + i) * 2], G[(j * (C + 1) + i) * 2 + 1]], tl = P(0, 0), tr = P(C, 0), bl = P(0, R2), br = P(C, R2);
     const c = [(tl[0] + tr[0] + bl[0] + br[0]) / 4, (tl[1] + tr[1] + bl[1] + br[1]) / 4], ux = [(tr[0] + br[0] - tl[0] - bl[0]) / 2, (tr[1] + br[1] - tl[1] - bl[1]) / 2], uy = [(bl[0] + br[0] - tl[0] - tr[0]) / 2, (bl[1] + br[1] - tl[1] - tr[1]) / 2];
@@ -13436,7 +13436,7 @@ const BUG = {
     let a = Math.hypot(...r1); r1 = r1.map(v => v / a); const d = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2]; r2 = r2.map((v, i) => v - d * r1[i]); a = Math.hypot(...r2); r2 = r2.map(v => v / a);
     const r3 = [r1[1] * r2[2] - r1[2] * r2[1], r1[2] * r2[0] - r1[0] * r2[2], r1[0] * r2[1] - r1[1] * r2[0]];
     return { f, cx, cy, r1, r2, r3, t }; },
-  update(lk, W, H, M) { if (!BUG.ready) BUG.init(); const now = performance.now() / 1000, dt = Math.min(0.1, BUG.last ? now - BUG.last : 0.016); BUG.last = now;
+  update(lk, W, H, M) { if (!BUG.ready) BUG.init(); const now = BUG.simT != null ? BUG.simT : performance.now() / 1000, dt = Math.max(0, Math.min(0.1, BUG.last != null ? now - BUG.last : 0.016)); BUG.last = now;
     const Hs = lk && (lk.Hs || lk.H); BUG.root.visible = !!Hs; if (!Hs) return; const Q = FLOW.cur, s = Q.s, P = BUG.pose(Hs, Q.w, Q.h), F = BUG.frame(lk), Ls = Math.min(F.W, F.H) * 0.95;
     // plane (lock-frame px, height towards the camera) → camera space (three.js axes)
     // 3D turn of the patch from how the skin around its centre is stretched (stable), not from the homography's perspective terms (noisy)
@@ -13525,6 +13525,108 @@ const BUG = {
   render() { if (!BUG.on || !BUG.ready || !BUG.root.visible) return; const r = GL.r; r.autoClear = false; r.clearDepth(); r.render(BUG.scene, BUG.cam); r.autoClear = true; }
 };
 
+/* ───────────── Record and render: film a clean clip, track it offline (forwards and backwards, smoothed with no lag),
+   find the other hand on every frame, then render the finished video. The way a planar tracker in post works. ───────────── */
+const REC = {
+  MAX: 300,
+  toggle() { if (REC.busy) return; if (REC.on) REC.stop(); else REC.start(); },
+  start() { const v = T.video; if (T.still || !v || !v.videoWidth) { toast('Recording needs the live camera'); return; } if (!T.last || !T.last.G) { toast('Place the tattoo on your skin first'); return; }
+    const W = v.videoWidth, H = v.videoHeight, k = Math.min(1, 720 / Math.max(W, H)), w = Math.round(W * k / 2) * 2, h = Math.round(H * k / 2) * 2;
+    Object.assign(REC, { on: true, w, h, frames: [], times: [], pending: 0, G0v: Float32Array.from(T.last.G, q => q * k), F0: Float32Array.from(T.last.F), mirror: T.mirror, bug: BUG.on });
+    const c = cv(w, h), x = c.getContext('2d'); REC.btn.classList.add('on');
+    const grab = () => { if (!REC.on) return; if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(grab); else requestAnimationFrame(grab);
+      if (REC.frames.length >= REC.MAX) { REC.stop(); return; } if (REC.pending > 5) return;
+      x.drawImage(v, 0, 0, w, h); const i = REC.frames.length; REC.frames.push(null); REC.times.push(performance.now()); REC.pending++; c.toBlob(b => { REC.frames[i] = b; REC.pending--; }, 'image/jpeg', 0.9);
+      const secs = (REC.times[i] - REC.times[0]) / 1000; REC.btn.textContent = '● ' + secs.toFixed(1) + 's  Stop'; };
+    grab(); },
+  async stop() { REC.on = false; REC.btn.classList.remove('on'); REC.btn.textContent = 'Record'; while (REC.pending > 0) await new Promise(r => setTimeout(r, 30));
+    const keep = REC.frames.map((b, i) => b ? i : -1).filter(i => i >= 0); REC.frames = keep.map(i => REC.frames[i]); REC.times = keep.map(i => REC.times[i]);
+    if (REC.frames.length < 15) { toast('Too short. Record at least one second.'); return; }
+    REC.busy = true; T.paused = true; const ui = REC.panel(); try { await REC.track(ui); await REC.renderVideo(ui); } catch (e) { console.error(e); ui.say('Could not finish: ' + (e.message || e)); ui.close(4000); } finally { REC.busy = false; T.paused = false; FLOW.prev = FLOW.cur = null; T.dropLock(); T.last = null; T.rmPrev = null; } },
+  panel() { const box = el('div', { class: 'tt-recui' }), msg = el('p', null, 'Getting ready...'), bar = el('i'), wrap = el('div', { class: 'tt-recbar' }, bar); box.append(el('b', null, 'Record and render'), msg, wrap); T.L.append(box);
+    return { say: t => msg.textContent = t, prog: f => bar.style.width = Math.round(f * 100) + '%', box, close: (ms = 0) => setTimeout(() => box.remove(), ms) }; },
+  async load(i, c) { const bm = await createImageBitmap(REC.frames[i]); const x = c.getContext('2d'); x.drawImage(bm, 0, 0, c.width, c.height); if (bm.close) bm.close(); },
+  // hands on a frame: yours stays yours by following it from frame to frame; any other hand is something in front
+  hands(c, i) { if (!AI.hand) return; let r; try { r = AI.hand.detectForVideo(c, REC.ts = Math.max((REC.ts || 0) + 1, performance.now())); } catch (e) { return; } const W = c.width, H = c.height;
+    const hs = (r.landmarks || []).map(h => h.map(q => [q.x * W, q.y * H])), cen = h => h.reduce((a, q) => [a[0] + q[0] / h.length, a[1] + q[1] / h.length], [0, 0]);
+    let own = -1, best = 1e9; const ref = REC.ownC; hs.forEach((h, k) => { const cc = cen(h), d = Math.hypot(cc[0] - ref[0], cc[1] - ref[1]); if (d < best) { best = d; own = k; } });
+    if (own >= 0 && best < Math.max(W, H) * 0.25) REC.ownC = cen(hs[own]); else own = -1; T.occHands = hs.filter((_, k) => k !== own); },
+  nearHand(lk, s) { lk.handNear = false; const hs = T.occHands; if (!hs || !hs.length) return; const N2 = lk.G0.length / 2, m = N2 >> 1, c2 = FLOW.ap(lk.H, lk.G0[m * 2], lk.G0[m * 2 + 1]), rr = Math.hypot(lk.G0[0] - lk.G0[(N2 - 1) * 2], lk.G0[1] - lk.G0[(N2 - 1) * 2 + 1]) * 0.9;
+    for (const h of hs) for (const q of h) if (Math.hypot(q[0] * s - c2[0], q[1] * s - c2[1]) < rr) { lk.handNear = true; return; } },
+  async track(ui) { const N = REC.frames.length, c = cv(REC.w, REC.h), tick = () => new Promise(r => setTimeout(r, 0));
+    REC.fps = Math.max(10, Math.min(60, (N - 1) / ((REC.times[N - 1] - REC.times[0]) / 1000)));
+    if (SPOTS[T.spot].need === 'hand' || REC.bug) { ui.say('Loading hand tracking...'); try { await loadAI('hand', 'VIDEO'); } catch (e) {} }
+    // ── forwards
+    FLOW.prev = FLOW.cur = null; T.rmPrev = null; T.occHands = null; await REC.load(0, c); FLOW.frame(c); const s = FLOW.cur.s; REC.s = s;
+    const G0 = Float32Array.from(REC.G0v, q => q * s), lk = FLOW.start(G0); if (!lk) throw new Error('not enough skin detail where the tattoo is. Draw a small pen dot there and try again.');
+    lk.s = s; REC.G0 = G0; const cq = FLOW.quadOf(G0, 1), pts = [...cq, cq.reduce((a, q) => [a[0] + q[0] / 4, a[1] + q[1] / 4], [0, 0])]; REC.pts = pts; REC.ownC = [pts[4][0] / s, pts[4][1] / s];
+    const Hf = new Array(N).fill(null), M = new Array(N).fill(null), near = new Array(N).fill(false); Hf[0] = lk.H.slice(); REC.hands(c, 0); T.rotoMask(lk);
+    const NC = 48 * 24, blob = (m, minA) => { const seen = new Uint8Array(NC), out = new Uint8Array(NC), st = []; for (let i = 0; i < NC; i++) { if (seen[i] || m[i] < 128) continue; const comp = []; st.push(i); seen[i] = 1;
+        while (st.length) { const c2 = st.pop(); comp.push(c2); const x = c2 % 48, y = (c2 / 48) | 0; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const X = x + dx, Y = y + dy; if (X < 0 || Y < 0 || X >= 48 || Y >= 24) continue; const j = Y * 48 + X; if (!seen[j] && m[j] >= 128) { seen[j] = 1; st.push(j); } } }
+        if (comp.length >= minA) for (const c2 of comp) out[c2] = m[c2]; } return out; };
+    REC.blob = blob; const rpos = lk.rpos, size = Math.hypot(G0[0] - G0[G0.length - 2], G0[1] - G0[G0.length - 1]), det = H => Math.sqrt(Math.abs(H[0] * H[4] - H[1] * H[3]) || 1e-9);
+    // skin under a covered part (or under a seen hand) is never followed, in either direction
+    const maskRej = (m, H) => { if (!m || !H) return null; const B = 8, Q = FLOW.cur, bw = Math.ceil(Q.w / B), bh = Math.ceil(Q.h / B), g = new Uint8Array(bw * bh); let any = 0;
+      for (let k = 0; k < NC; k++) if (m[k] > 100) { const q = FLOW.ap(H, rpos[k * 2], rpos[k * 2 + 1]), X = (q[0] / B) | 0, Y = (q[1] / B) | 0; for (let j = -2; j <= 2; j++) for (let i2 = -2; i2 <= 2; i2++) { const x = X + i2, y = Y + j; if (x >= 0 && y >= 0 && x < bw && y < bh) g[y * bw + x] = 1; } any = 1; }
+      return any ? (x, y) => { const X = (x / B) | 0, Y = (y / B) | 0; return X >= 0 && Y >= 0 && X < bw && Y < bh && g[Y * bw + X] === 1; } : null; };
+    const both = (a, b) => a && b ? (x, y) => a(x, y) || b(x, y) : a || b;
+    // a believable step: no sudden zoom, no jump, no fold
+    const sane = (Hp, Hn) => { if (!Hn || !FLOW.sane(lk, Hn)) return false; const r = det(Hn) / det(Hp); if (r < 0.75 || r > 1.33) return false; const a = FLOW.ap(Hp, pts[4][0], pts[4][1]), b = FLOW.ap(Hn, pts[4][0], pts[4][1]); return Math.hypot(a[0] - b[0], a[1] - b[1]) < size * 0.35; };
+    let good = lk.H.slice();
+    for (let i = 1; i < N; i++) { await REC.load(i, c); FLOW.frame(c); REC.hands(c, i); lk.H = good.slice(); REC.nearHand(lk, s);
+      // the cut-out first (where the skin no longer looks like your skin), then track only what is left visible
+      { const hn = lk.handNear; lk.handNear = true; try { T.rotoMask(lk); } catch (e) {} lk.handNear = hn; } const raw = T.rmPrev ? T.rmPrev.slice() : null, mf = raw ? blob(raw, lk.handNear ? 10 : 45) : null;
+      M[i] = raw; const rej = both(T.occRej(s), maskRej(mf, good));
+      let ok = FLOW.step(lk, rej); if (!ok) ok = FLOW.reacquire(lk, good, rej);
+      if (ok && sane(good, lk.H)) { lk.lost = 0; Hf[i] = lk.H.slice(); good = lk.H.slice(); } else { lk.lost = (lk.lost || 0) + 1; lk.H = good.slice(); lk.p = lk.a.map(q => FLOW.ap(good, q[0], q[1])); }
+      near[i] = lk.handNear;
+      ui.say('Tracking your skin, frame ' + (i + 1) + ' of ' + N); ui.prog(i / N * 0.45); if (i % 3 === 0) await tick(); }
+    // ── backwards, from the last trusted frame, to fill and double-check
+    let L = N - 1; while (L > 0 && !Hf[L]) L--; const Hb = new Array(N).fill(null);
+    if (L > 0) { FLOW.prev = FLOW.cur = null; await REC.load(L, c); FLOW.frame(c); const gL = new Float32Array(G0.length); for (let k = 0; k < G0.length; k += 2) { const q = FLOW.ap(Hf[L], G0[k], G0[k + 1]); gL[k] = q[0]; gL[k + 1] = q[1]; }
+      const lb = FLOW.start(gL); if (lb) { Hb[L] = Hf[L].slice(); let gb = Hf[L].slice(), gl = lb.H.slice();
+        for (let i = L - 1; i >= 0; i--) { await REC.load(i, c); FLOW.frame(c); const mi = M[i] ? blob(M[i], near[i] ? 10 : 45) : null, rej = both(T.occRej(s), maskRej(mi, gb)) , rejL = rej ? (x, y) => rej(x, y) : null;
+          lb.H = gl.slice(); let ok = FLOW.step(lb, rejL); if (!ok) ok = FLOW.reacquire(lb, gl, rejL); const Hn = ok ? FLOW.mul(lb.H, Hf[L]) : null;
+          if (ok && sane(gb, Hn)) { Hb[i] = Hn; gb = Hn; gl = lb.H.slice(); } else { lb.H = gl.slice(); lb.p = lb.a.map(q => FLOW.ap(gl, q[0], q[1])); }
+          ui.say('Checking it backwards, frame ' + (N - i) + ' of ' + N); ui.prog(0.45 + (L - i) / L * 0.3); if (i % 4 === 0) await tick(); } } }
+    // ── fuse: where both agree use both (more weight to the pass that started closer), fill gaps, then smooth over time with no lag
+    const P = pts.map(() => new Array(N).fill(null));
+    for (let i = 0; i < N; i++) { const f = Hf[i], b = Hb[i]; let wf = f ? 1 + (L - i) : 0, wb = b ? 1 + i : 0;
+      if (f && b) { const d = Math.hypot(...[0, 1].map(o => FLOW.ap(f, pts[4][0], pts[4][1])[o] - FLOW.ap(b, pts[4][0], pts[4][1])[o])); if (d > 25) { if (i < L / 2) wb = 0; else wf = 0; } }
+      if (!wf && !wb) continue; pts.forEach((p, k) => { const a = f ? FLOW.ap(f, p[0], p[1]) : [0, 0], bb = b ? FLOW.ap(b, p[0], p[1]) : [0, 0]; P[k][i] = [(a[0] * wf + bb[0] * wb) / (wf + wb), (a[1] * wf + bb[1] * wb) / (wf + wb)]; }); }
+    for (const tr of P) { let last = -1; for (let i = 0; i < N; i++) if (tr[i]) { if (last < 0) for (let j = 0; j < i; j++) tr[j] = tr[i].slice(); else for (let j = last + 1; j < i; j++) { const t = (j - last) / (i - last); tr[j] = [tr[last][0] + (tr[i][0] - tr[last][0]) * t, tr[last][1] + (tr[i][1] - tr[last][1]) * t]; } last = i; }
+      if (last < 0) throw new Error('lost your skin in this clip. Try again with slower moves.'); for (let j = last + 1; j < N; j++) tr[j] = tr[last].slice();
+      const sg = 1.3, R = 4, sm = tr.map((_, i) => { let sx = 0, sy = 0, sw = 0; for (let j = Math.max(0, i - R); j <= Math.min(N - 1, i + R); j++) { const w = Math.exp(-((j - i) ** 2) / (2 * sg * sg)); sx += tr[j][0] * w; sy += tr[j][1] * w; sw += w; } return [sx / sw, sy / sw]; }); sm.forEach((q, i) => tr[i] = q); }
+    REC.H = new Array(N).fill(0).map((_, i) => FLOW.fitH(pts, P.map(tr => tr[i])));
+    // masks: a frame between two covered frames is covered too
+    // masks over the whole clip: a cell counts as covered only if it is covered in at least 2 of 3 frames in a row, and only as part of a big area
+    // (or anywhere the hand model saw another hand): real camera noise never passes both tests
+    REC.M = M.map((m, i) => { if (!m) return null; const a = M[i - 1], b = M[i + 1], t = new Uint8Array(NC); let any = 0; for (let k = 0; k < NC; k++) { const v = [a ? a[k] : 0, m[k], b ? b[k] : 0].sort((x, y) => x - y)[1]; t[k] = v; if (v > 127) any++; }
+      if (!any) return null; const o = blob(t, near[i] ? 10 : 45); let c3 = 0; for (let k = 0; k < NC; k++) if (o[k] > 127) c3++; if (!c3) return null; near[i] = near[i] || c3 > NC * 0.08; return o; });
+    REC.near = near; ui.prog(0.78); },
+  // one cell wider all round, so no ink peeks out at a finger's edge
+  grow(m) { const o = new Uint8Array(m.length); for (let y = 0; y < 24; y++) for (let x = 0; x < 48; x++) { let v = 0; for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) { const X = x + i, Y = y + j; if (X >= 0 && Y >= 0 && X < 48 && Y < 24) v = Math.max(v, m[Y * 48 + X]); } o[y * 48 + x] = v; } return o; },
+  putMask(m) { const MW = 48, MH = 24, NC = MW * MH; if (GL.rtex.image.width !== MW) { GL.rtex.dispose(); GL.rtex = new THREE.DataTexture(new Uint8Array(NC * 4), MW, MH, THREE.RGBAFormat); GL.rtex.minFilter = GL.rtex.magFilter = THREE.LinearFilter; GL.ink.material.uniforms.rmask.value = GL.rtex; }
+    const d = GL.rtex.image.data; for (let i = 0; i < NC; i++) { const yy = MH - 1 - ((i / MW) | 0), xx = i % MW; d[(yy * MW + xx) * 4] = m ? m[i] : 0; } GL.rtex.needsUpdate = true; GL.ink.material.uniforms.useR.value = m ? 1 : 0; },
+  async renderVideo(ui) { const N = REC.frames.length, w = REC.w, h = REC.h, r = GL.r, pr0 = r.getPixelRatio(), W0 = GL.w, H0 = GL.h, s = REC.s, fc = GL.frameCv;
+    r.setPixelRatio(1); r.setSize(w, h, false); GL.w = w; GL.h = h; fc.width = w; fc.height = h; GL.ftex.dispose(); const mir = T.mirror; T.mirror = REC.mirror;
+    const stream = r.domElement.captureStream(0), track = stream.getVideoTracks()[0], mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+    if (!mime) throw new Error('this browser cannot save video'); const mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 10e6 }), chunks = []; mr.ondataavailable = e => e.data.size && chunks.push(e.data); const done = new Promise(res => mr.onstop = res); mr.start();
+    if (REC.bug) { BUG.on = true; BUG.reset(); } const G0 = REC.G0, Cg = GL.C, Rg = GL.R, Nn = (Cg + 1) * (Rg + 1), lk = { G0, H: null, Hs: null, rinit: 1, lost: 0, handNear: false, s }, M = mapper(w, h), g = GL.ink.geometry, Pa = g.attributes.position, Fd = g.attributes.fade;
+    for (let i = 0; i < N; i++) { const t0 = performance.now(); await REC.load(i, fc); GL.ftex.needsUpdate = true; FLOW.frame(fc); const Hm = REC.H[i];
+      const bp = GL.bg.geometry.attributes.position; [[0, 0], [w, 0], [0, h], [w, h]].forEach(([x, y], k) => { const [a, b] = M.to(x, y); bp.setXYZ(k, a, b, 0); }); bp.needsUpdate = true;
+      for (let k = 0; k < Nn; k++) { const q = FLOW.ap(Hm, G0[k * 2], G0[k * 2 + 1]), s2 = M.to(q[0] / s, q[1] / s); Pa.setXYZ(k, s2[0], s2[1], 0); Fd.setX(k, REC.F0[k]); } Pa.needsUpdate = true; Fd.needsUpdate = true;
+      const um = GL.ink.material.uniforms; um.op.value = T.opacity; um.healed.value = T.healed ? 1 : 0; um.occ.value = 0; um.useHand.value = 0; const mk = REC.M[i] && REC.grow(REC.M[i]); REC.putMask(mk); T.rmPrev = mk;
+      if (REC.bug) { GL.ink.visible = false; lk.H = lk.Hs = Hm; lk.handNear = REC.near[i]; BUG.simT = i / REC.fps; BUG.update(lk, w, h, M); if (BUG.phase === 'walk' && i > N * 0.8 && !REC.near.slice(i).some(Boolean)) BUG.toInk(); } else GL.ink.visible = true;
+      r.render(GL.scene, GL.cam); BUG.render(); track.requestFrame && track.requestFrame();
+      ui.say('Rendering your video, frame ' + (i + 1) + ' of ' + N); ui.prog(0.78 + (i + 1) / N * 0.22);
+      const wait = 1000 / REC.fps - (performance.now() - t0); await new Promise(res => setTimeout(res, Math.max(4, wait))); }
+    await new Promise(res => setTimeout(res, 200)); mr.stop(); await done; BUG.simT = null; T.mirror = mir; r.setPixelRatio(pr0); GL.w = 0; GL.h = 0; GL.size(); fc.width = 16; fc.height = 16; GL.ftex.dispose();
+    const blob = new Blob(chunks, { type: mime.split(';')[0] }), url = URL.createObjectURL(blob), ext = mime.includes('mp4') ? 'mp4' : 'webm'; REC.result = blob;
+    ui.box.textContent = ''; const vid = el('video', { src: url, controls: true, playsinline: true, autoplay: true, loop: true, muted: true }); vid.muted = true;
+    ui.box.append(el('b', null, 'Your video'), vid, el('div', { class: 'tt-recrow' }, el('button', { class: 'tt-recgo', onclick: () => shareOrSave(blob, 'picalive-tattoo.' + ext) }, 'Save or share'), el('button', { onclick: () => { URL.revokeObjectURL(url); ui.box.remove(); } }, 'Close'))); }
+};
+
 /* video pixels → screen (cover for the live camera, contain for a photo), mirrored for the selfie camera */
 function mapper(VW, VH) { const SW = GL.w, SH = GL.h, k = T.still ? Math.min(SW / VW, SH / VH) : Math.max(SW / VW, SH / VH), ox = (SW - VW * k) / 2, oy = (SH - VH * k) / 2;
   return { k, to: (x, y) => { let sx = ox + x * k; if (T.mirror) sx = SW - sx; return [sx / SW * 2 - 1, -((oy + y * k) / SH * 2 - 1)]; },
@@ -13547,7 +13649,7 @@ const T = {
       el('div', { class: 'tt-tog' }, el('button', { class: 'on', onclick: e => { T.healed = false; e.currentTarget.classList.add('on'); e.currentTarget.nextSibling.classList.remove('on'); } }, 'Fresh'), el('button', { onclick: e => { T.healed = true; e.currentTarget.classList.add('on'); e.currentTarget.previousSibling.classList.remove('on'); } }, 'Healed')));
     const shot = el('button', { class: 'tt-shot', 'aria-label': 'Take a photo', onclick: T.capture });
     const panel = el('div', { class: 'tt-panel' }), hide = el('button', { class: 'tt-hide', 'aria-label': 'Hide or show tools', onclick: () => { panel.classList.toggle('mini'); hide.textContent = panel.classList.contains('mini') ? 'Show tools' : 'Hide tools'; } }, 'Hide tools');
-    panel.append(hide, spots, designs, opts); T.bugBtn = BUG.btn = el('button', { class: 'tt-bug', onclick: () => BUG.toggle() }, 'Turn into tattoo'); T.bugBtn.style.display = BUG.on ? '' : 'none'; L.append(top, T.status, panel, shot, T.bugBtn);
+    panel.append(hide, spots, designs, opts); T.bugBtn = BUG.btn = el('button', { class: 'tt-bug', onclick: () => BUG.toggle() }, 'Turn into tattoo'); T.bugBtn.style.display = BUG.on ? '' : 'none'; REC.btn = el('button', { class: 'tt-rec', onclick: () => REC.toggle() }, 'Record'); L.append(top, T.status, panel, shot, T.bugBtn, REC.btn);
     T.fillDesigns(); T.setDesign(T.design || DESIGNS.mandala[1](), T.dkey || 'mandala');
     T.wire(); T.run();
     try { await T.startCam(); } catch (e) { T.say('No camera here. Tap the picture button to try it on a photo.'); }
@@ -13600,9 +13702,11 @@ const T = {
     T.raw = raw; T.world = wl ? world : null; T.ex = extra; T.cam = wl ? fitCam(keys.map(k => world[k]), keys.map(k => raw[k])) : null; },
   /* the frame loop: copy the camera frame, find the body part in it, then draw that same frame and the ink together */
   run() { const v = T.video, my = T.gen = (T.gen || 0) + 1; const next = () => { if (!T.L || my !== T.gen) return; if (!T.still && v.requestVideoFrameCallback) v.requestVideoFrameCallback(tick); else requestAnimationFrame(tick); };
-    const tick = () => { if (!T.L || my !== T.gen) return; next(); GL.size(); const src = T.still || (v.readyState >= 2 && v.videoWidth ? v : null); if (!src) { GL.r.render(GL.scene, GL.cam); return; }
+    const tick = () => { if (!T.L || my !== T.gen) return; next(); if (T.paused) return; GL.size(); const src = T.still || (v.readyState >= 2 && v.videoWidth ? v : null); if (!src) { GL.r.render(GL.scene, GL.cam); return; }
       const W = src.videoWidth || src.width, H = src.videoHeight || src.height, fc = GL.frameCv; if (fc.width !== W || fc.height !== H) { fc.width = W; fc.height = H; GL.ftex.dispose(); }
       const x = fc.getContext('2d'); if (!T.still || !T._stillDrawn || T._stillDrawn !== T.still) { x.drawImage(src, 0, 0, W, H); GL.ftex.needsUpdate = true; T._stillDrawn = T.still; }
+      // while recording: just show the camera (every frame goes into the clip at full speed; the effect is added after)
+      if (REC.on) { const M = mapper(W, H), bp = GL.bg.geometry.attributes.position; [[0, 0], [W, 0], [0, H], [W, H]].forEach(([x2, y2], k) => { const [a, b] = M.to(x2, y2); bp.setXYZ(k, a, b, 0); }); bp.needsUpdate = true; GL.ink.visible = false; GL.r.render(GL.scene, GL.cam); T.say('Recording. Move your arm, wipe the spider with your other hand, then tap Stop.', true); return; }
       if (!T.still) { try { FLOW.frame(fc); } catch (e) {} }
       // while the skin lock holds, the body model only needs to check in now and then (keeps the frame rate high)
       T.fn = (T.fn || 0) + 1; if (!T.still && T.ready && SPOTS[T.spot].need && (!T.lock || T.lock.lost || T.fn % 4 === 0 || SPOTS[T.spot].need === 'hand')) { try { T.detect(fc, performance.now(), false); } catch (e) {} }
@@ -13805,11 +13909,15 @@ document.head.append(el('style', null, `
 .tt-tog{display:flex;padding:3px;border-radius:99px;background:rgba(255,246,230,.07);border:1px solid var(--line)}.tt-tog button{flex:1;padding:5px 0;border-radius:99px;font-size:.74rem;color:var(--muted)}.tt-tog button.on{background:#f6f0e6;color:#111;font-weight:700}
 .tt-hide{justify-self:center;background:rgba(255,255,255,.12);color:#f3ead8;border:0;border-radius:99px;padding:5px 14px;font-size:12px}.tt-panel.mini{background:linear-gradient(0deg,rgba(10,9,8,.7) 60%,transparent)}.tt-panel.mini .tt-designs,.tt-panel.mini .tt-opts{display:none}
 .tt-bug{position:absolute;right:16px;bottom:calc(30px + var(--safe-b));z-index:4;background:rgba(20,17,14,.78);color:#f3ead8;border:1px solid rgba(201,164,95,.7);border-radius:99px;padding:10px 14px;font-size:13px}
+.tt-rec{position:absolute;left:16px;bottom:calc(30px + var(--safe-b));z-index:4;background:rgba(20,17,14,.78);color:#f3ead8;border:1px solid rgba(201,164,95,.7);border-radius:99px;padding:10px 14px;font-size:13px;min-width:118px;font-variant-numeric:tabular-nums}.tt-rec::before{content:'';display:inline-block;width:9px;height:9px;border-radius:50%;background:#e5484d;margin-right:7px;vertical-align:0}.tt-rec.on{background:#b3262b;color:#fff}.tt-rec.on::before{display:none}
+.tt-recui{position:absolute;inset:auto 12px calc(110px + var(--safe-b)) 12px;z-index:6;background:rgba(14,12,10,.94);border:1px solid rgba(201,164,95,.5);border-radius:18px;padding:16px;color:#f3ead8;display:grid;gap:10px;max-height:78vh}
+.tt-recui p{margin:0;font-size:13px;color:#cfc4b2}.tt-recbar{height:6px;border-radius:9px;background:rgba(255,255,255,.12);overflow:hidden}.tt-recbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#c9a45f,#f0d79a)}
+.tt-recui video{width:100%;max-height:56vh;border-radius:12px;background:#000;object-fit:contain}.tt-recrow{display:flex;gap:10px}.tt-recrow button{flex:1;padding:11px;border-radius:12px;border:1px solid rgba(201,164,95,.6);background:transparent;color:#f3ead8}.tt-recrow .tt-recgo{background:linear-gradient(90deg,#c9a45f,#e8cd8d);color:#1a140c;border:0;font-weight:600}
 .tt-shot{position:absolute;left:50%;bottom:calc(18px + var(--safe-b));transform:translateX(-50%);z-index:4;width:68px;height:68px;border-radius:50%;background:#fff;border:5px solid rgba(201,164,95,.9);box-shadow:0 0 0 4px rgba(0,0,0,.35)}
 .tt.flash:after{content:"";position:absolute;inset:0;background:#fff;opacity:.7;z-index:9;pointer-events:none}
 `));
 window.PicAliveTattoo = { open: () => T.open(), T, GL, FLOW, DESIGNS, toInk, textInk };
-window.PicAliveBug = BUG;
+window.PicAliveBug = BUG; window.PicAliveRec = REC;
 })();
 </script>
 <script>(() => {
