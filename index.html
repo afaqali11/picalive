@@ -13339,7 +13339,7 @@ const FLOW = {
 const { THREE } = window.AREngine;
 const GL = {
   init(host) { const r = GL.r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false }); r.setPixelRatio(Math.min(2, devicePixelRatio || 1)); r.autoClear = true; r.setClearColor(0x000000);
-    host.append(r.domElement); r.domElement.className = 'tt-view'; GL.scene = new THREE.Scene(); GL.cam = new THREE.PerspectiveCamera();
+    host.append(r.domElement); r.domElement.className = 'tt-view'; GL.scene = new THREE.Scene(); GL.cam = new THREE.PerspectiveCamera(); BUG.ready = false;
     const vs = 'attribute float fade; varying vec2 vUv; varying float vF; void main(){ vUv = uv; vF = fade; gl_Position = vec4(position.xy, 0.0, 1.0); }';
     GL.frameCv = cv(16); GL.ftex = new THREE.CanvasTexture(GL.frameCv); GL.ftex.minFilter = THREE.LinearFilter; GL.ftex.generateMipmaps = false;
     const bgGeo = new THREE.BufferGeometry(); bgGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12), 3)); bgGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 0, 0, 1, 0], 2)); bgGeo.setAttribute('fade', new THREE.Float32BufferAttribute([1, 1, 1, 1], 1)); bgGeo.setIndex([0, 2, 1, 2, 3, 1]);
@@ -13368,6 +13368,153 @@ const GL = {
   size() { const c = GL.r.domElement, w = c.clientWidth || innerWidth, h = c.clientHeight || innerHeight; if (GL.w !== w || GL.h !== h) { GL.w = w; GL.h = h; GL.r.setSize(w, h, false); } },
   setDesign(c) { if (GL.dtex) GL.dtex.dispose(); const t = GL.dtex = new THREE.CanvasTexture(c); t.anisotropy = 4; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; GL.ink.material.uniforms.map.value = t; }
 };
+/* ───────────── Real spider: a 3D spider walks on the locked skin, then a hand wipe turns it into a tattoo of itself ─────────────
+   The skin lock gives a homography from the lock frame to now. With a phone-like focal length it splits into a 3D pose of the
+   skin patch (rotation + position), so the spider stands on the skin in true perspective and its shadow lies on it. */
+const BUG = {
+  on: false, phase: 'walk',
+  init() { const S = BUG.scene = new THREE.Scene(); BUG.cam = new THREE.PerspectiveCamera(); BUG.cam.matrixAutoUpdate = false;
+    BUG.root = new THREE.Group(); BUG.root.matrixAutoUpdate = false; S.add(BUG.root);
+    BUG.hemi = new THREE.HemisphereLight(0xfff4e8, 0x8a6a58, 1.1); S.add(BUG.hemi);
+    BUG.sun = new THREE.DirectionalLight(0xffffff, 1.6); BUG.sun.position.set(-0.45, 0.75, 0.5); S.add(BUG.sun); S.add(BUG.sun.target);
+    BUG.body = BUG.makeSpider(); BUG.root.add(BUG.body.g);
+    BUG.inkCv = cv(512); BUG.inkTex = new THREE.CanvasTexture(BUG.inkCv); BUG.inkTex.colorSpace = THREE.SRGBColorSpace; BUG.ocam = new THREE.PerspectiveCamera(); BUG.ocam.matrixAutoUpdate = false;
+    // the tattoo it becomes: a flat picture of this same spider, multiplied onto the skin and cut by the roto mask like the other designs
+    const qg = new THREE.BufferGeometry(); qg.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12), 3)); qg.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 0, 0, 1, 0], 2));
+    qg.setAttribute('tuv', new THREE.Float32BufferAttribute(new Float32Array(8), 2)); qg.setIndex([0, 2, 1, 1, 2, 3]);
+    BUG.inkQ = new THREE.Mesh(qg, new THREE.ShaderMaterial({ uniforms: { map: { value: BUG.inkTex }, rmask: { value: null }, useR: { value: 0 }, op: { value: 0 }, healed: { value: 0 } },
+      vertexShader: 'attribute vec2 tuv; varying vec2 vUv; varying vec2 vT; void main(){ vUv = uv; vT = tuv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D map; uniform sampler2D rmask; uniform float useR; uniform float op; uniform float healed; varying vec2 vUv; varying vec2 vT;
+        void main(){ vec4 c = texture2D(map, vUv, 0.4 + healed); float d = c.a; d = mix(d, d * 0.85, healed); d *= op;
+          if (useR > 0.5) d *= 1.0 - smoothstep(0.35, 0.65, texture2D(rmask, vec2(vT.x, 1.0 - vT.y)).r);
+          vec3 inkc = mix(vec3(0.07, 0.08, 0.10), vec3(0.16, 0.2, 0.22), healed);
+          gl_FragColor = vec4(mix(vec3(1.0), inkc, clamp(d, 0.0, 1.0)), 1.0); }`,
+      depthTest: false, depthWrite: false, side: THREE.DoubleSide, blending: 5, blendSrc: 208, blendDst: 200, blendEquation: 100 }));
+    BUG.inkQ.frustumCulled = false; BUG.inkQ.renderOrder = 1; BUG.root.add(BUG.inkQ);
+    BUG.ready = true; BUG.reset(); },
+  // ── the spider, built from code: two body parts, eight three-part legs, palps, fangs, eyes; units are its leg span (1)
+  // a hand in front hides the spider too: each part looks up the same cut-out mask at its spot on the skin
+  occlude(m) { const U = BUG.U || (BUG.U = { uRM: { value: null }, uUseR: { value: 0 }, uPI: { value: new THREE.Matrix4() }, uTL: { value: new THREE.Vector2() }, uAX: { value: new THREE.Vector2() }, uAY: { value: new THREE.Vector2() } });
+    m.onBeforeCompile = sh => { Object.assign(sh.uniforms, U);
+      sh.vertexShader = 'uniform mat4 uPI; uniform vec2 uTL, uAX, uAY; varying vec2 vTU;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n vec4 pp = uPI * modelMatrix * vec4(transformed, 1.0); vTU = vec2(dot(pp.xy - uTL, uAX), dot(pp.xy - uTL, uAY));');
+      sh.fragmentShader = 'uniform sampler2D uRM; uniform float uUseR; varying vec2 vTU;\n' + sh.fragmentShader.replace('void main() {', 'void main() {\n if (uUseR > 0.5 && texture2D(uRM, vec2(vTU.x, 1.0 - vTU.y)).r > 0.5) discard;'); };
+    return m; },
+  makeSpider() { const g = new THREE.Group(), tex = (base, pat) => { const c = cv(256), x = c.getContext('2d'); x.fillStyle = base; x.fillRect(0, 0, 256, 256);
+        for (let i = 0; i < 2600; i++) { const v = Math.random(); x.fillStyle = `rgba(${v > 0.5 ? '255,235,210' : '0,0,0'},${0.05 + Math.random() * 0.12})`; x.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2, 3 + Math.random() * 7); }
+        if (pat) { x.strokeStyle = 'rgba(160,125,90,.35)'; x.lineWidth = 7; for (let i = 0; i < 5; i++) { x.beginPath(); x.moveTo(40, 70 + i * 32); x.lineTo(128, 95 + i * 32); x.lineTo(216, 70 + i * 32); x.stroke(); } x.fillStyle = 'rgba(30,18,10,.6)'; x.fillRect(120, 0, 16, 256); }
+        const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+    const O = m => BUG.occlude(m), hair = tex('#4a3324'), mat = O(new THREE.MeshStandardMaterial({ map: hair, bumpMap: hair, bumpScale: 0.004, roughness: 0.62, metalness: 0.05, side: THREE.DoubleSide })),
+      abd = O(new THREE.MeshStandardMaterial({ map: tex('#4f3626', true), bumpMap: hair, bumpScale: 0.004, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide })),
+      legM = O(new THREE.MeshStandardMaterial({ map: hair, roughness: 0.6, metalness: 0.05, color: 0xd8c4b0, side: THREE.DoubleSide })),
+      eyeM = O(new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.08, metalness: 0.3 }));
+    const ell = (rx, ry, rz, m) => { const s = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 20), m); s.scale.set(rx, ry, rz); s.frustumCulled = false; return s; };
+    const thorax = ell(0.085, 0.1, 0.05, mat); thorax.position.set(0, -0.05, 0.065); g.add(thorax);
+    const abdomen = ell(0.12, 0.16, 0.09, abd); abdomen.position.set(0, 0.17, 0.1); abdomen.rotation.x = 0.15; g.add(abdomen);
+    const waist = ell(0.03, 0.04, 0.03, mat); waist.position.set(0, 0.04, 0.075); g.add(waist);
+    for (const s of [-1, 1]) { const f = ell(0.022, 0.035, 0.03, mat); f.position.set(s * 0.025, -0.145, 0.05); f.rotation.x = -0.5; g.add(f);
+      for (const [ex, ey, r] of [[0.018, -0.13, 0.012], [0.04, -0.12, 0.008], [0.012, -0.115, 0.008]]) { const e = ell(r, r, r, eyeM); e.position.set(s * ex, ey, 0.1); g.add(e); } }
+    const cyl = new THREE.CylinderGeometry(1, 0.8, 1, 7, 1), ball = new THREE.SphereGeometry(1, 10, 8), legs = [];
+    const seg = (r) => { const m = new THREE.Mesh(cyl, legM); m.userData.r = r; m.frustumCulled = false; g.add(m); return m; }, joint = r => { const m = new THREE.Mesh(ball, legM); m.scale.setScalar(r); m.frustumCulled = false; g.add(m); return m; };
+    const ang = [0.55, 1.15, 1.85, 2.45], reach = [0.5, 0.43, 0.41, 0.47];
+    for (let k = 0; k < 4; k++) for (const s of [-1, 1]) { const a = ang[k], dir = [s * Math.sin(a), -Math.cos(a)], hip = [dir[0] * 0.07, -0.05 + dir[1] * 0.07, 0.06];
+      legs.push({ s, k, dir, hip, rest: [dir[0] * reach[k], -0.05 + dir[1] * reach[k]], grp: (k + (s > 0 ? 1 : 0)) % 2, segs: [seg(0.019), seg(0.014), seg(0.009)], joints: [joint(0.02), joint(0.014)], foot: null }); }
+    const palps = [-1, 1].map(s => ({ s, segs: [seg(0.01), seg(0.009)] }));
+    return { g, legs, palps, thorax, abdomen }; },
+  placeSeg(m, a, b) { const d = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]), L = d.length() || 1e-6; m.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+    m.quaternion.setFromUnitVectors(BUG._up || (BUG._up = new THREE.Vector3(0, 1, 0)), d.divideScalar(L)); m.scale.set(m.userData.r, L, m.userData.r); },
+  reset() { BUG.phase = 'walk'; BUG.t = 0; BUG.pos = null; BUG.head = 0; BUG.gait = 0; BUG.speed = 0; BUG.fade = 0; BUG.inkOp = 0; BUG.cov = 0; BUG.target = null; BUG.pause = 0.6; if (BUG.btn) BUG.btn.textContent = 'Turn into tattoo'; },
+  // the skin patch's frame, in lock-frame pixels: centre, right and down directions, and size
+  frame(lk) { const G = lk.G0, C = GL.C, R2 = GL.R, P = (i, j) => [G[(j * (C + 1) + i) * 2], G[(j * (C + 1) + i) * 2 + 1]], tl = P(0, 0), tr = P(C, 0), bl = P(0, R2), br = P(C, R2);
+    const c = [(tl[0] + tr[0] + bl[0] + br[0]) / 4, (tl[1] + tr[1] + bl[1] + br[1]) / 4], ux = [(tr[0] + br[0] - tl[0] - bl[0]) / 2, (tr[1] + br[1] - tl[1] - bl[1]) / 2], uy = [(bl[0] + br[0] - tl[0] - tr[0]) / 2, (bl[1] + br[1] - tl[1] - tr[1]) / 2];
+    return { c, tl, ux, uy, W: Math.hypot(ux[0], ux[1]), H: Math.hypot(uy[0], uy[1]) }; },
+  // 3D pose of the skin patch from the homography (lock frame → now), with a phone-like lens
+  pose(Hm, w, h) { const f = Math.max(w, h) * 0.95, cx = w / 2, cy = h / 2, col = j => [(Hm[j] - cx * Hm[6 + j]) / f, (Hm[3 + j] - cy * Hm[6 + j]) / f, Hm[6 + j]];
+    // the lock frame is taken as facing the camera at depth f (pixel units); then K^-1·H = [r1 r2 t] up to scale
+    let r1 = col(0), r2 = col(1), t = col(2);
+    const n1 = Math.hypot(...r1), n2 = Math.hypot(...r2), lam = 2 / (n1 + n2); r1 = r1.map(v => v * lam); r2 = r2.map(v => v * lam); t = t.map(v => v * lam);
+    if (t[2] < 0) { r1 = r1.map(v => -v); r2 = r2.map(v => -v); t = t.map(v => -v); }
+    let a = Math.hypot(...r1); r1 = r1.map(v => v / a); const d = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2]; r2 = r2.map((v, i) => v - d * r1[i]); a = Math.hypot(...r2); r2 = r2.map(v => v / a);
+    const r3 = [r1[1] * r2[2] - r1[2] * r2[1], r1[2] * r2[0] - r1[0] * r2[2], r1[0] * r2[1] - r1[1] * r2[0]];
+    return { f, cx, cy, r1, r2, r3, t }; },
+  update(lk, W, H, M) { if (!BUG.ready) BUG.init(); const now = performance.now() / 1000, dt = Math.min(0.1, BUG.last ? now - BUG.last : 0.016); BUG.last = now;
+    const Hs = lk && (lk.Hs || lk.H); BUG.root.visible = !!Hs; if (!Hs) return; const Q = FLOW.cur, s = Q.s, P = BUG.pose(Hs, Q.w, Q.h), F = BUG.frame(lk), Ls = Math.min(F.W, F.H) * 0.95;
+    // plane (lock-frame px, height towards the camera) → camera space (three.js axes)
+    const m = new THREE.Matrix4(); m.set(P.r1[0], P.r2[0], -P.r3[0], P.t[0], -P.r1[1], -P.r2[1], P.r3[1], -P.t[1], -P.r1[2], -P.r2[2], P.r3[2], -P.t[2], 0, 0, 0, 1); BUG.root.matrix.copy(m); BUG.root.matrixWorldNeedsUpdate = true;
+    // camera: lens in FLOW pixels → video pixels → screen
+    const o = M.to(0, 0), ox1 = M.to(1, 0)[0] - o[0], oy1 = M.to(0, 1)[1] - o[1], ax = ox1 * P.f / s, ay = oy1 * P.f / s, bx = o[0] + ox1 * P.cx / s, by = o[1] + oy1 * P.cy / s, n = 5, fa = 1e6;
+    BUG.cam.projectionMatrix.set(ax, 0, -bx, 0, 0, -ay, -by, 0, 0, 0, -(fa + n) / (fa - n), -2 * fa * n / (fa - n), 0, 0, -1, 0); BUG.cam.projectionMatrixInverse.copy(BUG.cam.projectionMatrix).invert();
+    // light follows how bright your skin is right now
+    { let sum = 0, cnt = 0; const L2 = Q.L[2], cc = FLOW.ap(Hs, F.c[0], F.c[1]); for (let j = -6; j <= 6; j += 2) for (let i = -6; i <= 6; i += 2) { sum += FLOW.bil(L2, cc[0] / 4 + i, cc[1] / 4 + j); cnt++; } const e = Math.min(1.6, Math.max(0.35, sum / cnt / 150)); BUG.hemi.intensity = 1.0 * e; BUG.sun.intensity = 1.5 * e; }
+    const B = BUG.body, uxn = [F.ux[0] / F.W, F.ux[1] / F.W], uyn = [F.uy[0] / F.H, F.uy[1] / F.H];
+    if (!BUG.pos) { BUG.pos = [-0.35, 0.3]; BUG.head = -0.9; }
+    // wander in little bursts, like a real spider, inside the tattoo area
+    if (BUG.phase === 'walk') { BUG.t += dt; if (BUG.pause > 0) { BUG.pause -= dt; BUG.speed = Math.max(0, BUG.speed - dt * 2); } else {
+        if (!BUG.target) BUG.target = [(Math.random() - 0.5) * 0.45, (Math.random() - 0.5) * 0.45];
+        const dx = BUG.target[0] - BUG.pos[0], dy = BUG.target[1] - BUG.pos[1], dist = Math.hypot(dx, dy), want = Math.atan2(dx, -dy); let dh = want - BUG.head; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+        BUG.head += Math.max(-dt * 3, Math.min(dt * 3, dh)); BUG.speed = Math.min(0.45, BUG.speed + dt * 2.5) * (Math.abs(dh) > 1 ? 0.4 : 1);
+        BUG.pos[0] += Math.sin(BUG.head) * BUG.speed * dt; BUG.pos[1] -= Math.cos(BUG.head) * BUG.speed * dt;
+        if (dist < 0.05) { BUG.target = null; BUG.pause = 0.4 + Math.random() * 1.2; } }
+      BUG.gait += BUG.speed * dt / 0.09 * Math.PI; }
+    // body placement on the skin (units: tattoo size)
+    const cxp = F.c[0] + (BUG.pos[0] * uxn[0] + BUG.pos[1] * uyn[0]) * Ls, cyp = F.c[1] + (BUG.pos[0] * uxn[1] + BUG.pos[1] * uyn[1]) * Ls, ch = Math.cos(BUG.head), sh = Math.sin(BUG.head);
+    const bx2 = [uxn[0] * ch + uyn[0] * sh, uxn[1] * ch + uyn[1] * sh], by2 = [-uxn[0] * sh + uyn[0] * ch, -uxn[1] * sh + uyn[1] * ch];
+    BUG.bodyM = new THREE.Matrix4().set(bx2[0] * Ls, by2[0] * Ls, 0, cxp, bx2[1] * Ls, by2[1] * Ls, 0, cyp, 0, 0, Ls, 0, 0, 0, 0, 1);
+    B.g.matrixAutoUpdate = false; B.g.matrix.copy(BUG.bodyM); B.g.matrixWorldNeedsUpdate = true;
+    // legs: two groups step in turn; each foot swings forward and lifts, then pushes back on the skin
+    for (const l of B.legs) { const ph = BUG.gait + (l.grp ? Math.PI : 0), stride = 0.09 * Math.min(1, BUG.speed / 0.2), tw = BUG.speed < 0.02 ? Math.sin(now * 3 + l.k * 1.7 + l.s) * 0.008 : 0;
+      const fx = l.rest[0], fy = l.rest[1] - Math.sin(ph) * stride + tw, fz = Math.max(0, Math.cos(ph)) * 0.05 * Math.min(1, BUG.speed / 0.15);
+      const hip = l.hip, dx = fx - hip[0], dy = fy - hip[1], dd = Math.hypot(dx, dy), bv = (v => (l.k < 2 ? v[1] > 0 : v[1] < 0) ? [-v[0], -v[1]] : v)([-dy / (dd || 1), dx / (dd || 1)]), knee = [hip[0] + dx * 0.36 + bv[0] * 0.06, hip[1] + dy * 0.36 + bv[1] * 0.06, 0.17 + fz * 0.6], mid = [hip[0] + dx * 0.8 + bv[0] * 0.03, hip[1] + dy * 0.8 + bv[1] * 0.03, 0.07 + fz], foot = [fx, fy, fz];
+      BUG.placeSeg(l.segs[0], hip, knee); BUG.placeSeg(l.segs[1], knee, mid); BUG.placeSeg(l.segs[2], mid, foot); l.joints[0].position.set(...knee); l.joints[1].position.set(...mid); }
+    for (const p of B.palps) { const a = [p.s * 0.03, -0.13, 0.06], b = [p.s * 0.06, -0.19, 0.06], c = [p.s * 0.05, -0.23, 0.02 + Math.max(0, Math.sin(now * 5 + p.s)) * 0.01]; BUG.placeSeg(p.segs[0], a, b); BUG.placeSeg(p.segs[1], b, c); }
+    B.abdomen.position.z = 0.1 + Math.sin(now * 2.2) * 0.003;
+    // soft contact shadow, drawn on the skin under the spider
+    if (!BUG.shadow) { const c = cv(128), x = c.getContext('2d'), gr = x.createRadialGradient(64, 64, 4, 64, 64, 62); x.fillStyle = '#fff'; x.fillRect(0, 0, 128, 128); gr.addColorStop(0, 'rgba(0,0,0,.5)'); gr.addColorStop(0.5, 'rgba(0,0,0,.2)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 128, 128);
+      const t2 = new THREE.CanvasTexture(c); BUG.shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), BUG.occlude(new THREE.MeshBasicMaterial({ map: t2, transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide, blending: 5, blendSrc: 208, blendDst: 200, blendEquation: 100 })));
+      BUG.shadow.frustumCulled = false; BUG.shadow.renderOrder = 0; B.g.add(BUG.shadow); }
+    BUG.shadow.position.set(0.05, 0.08, 0.002); BUG.shadow.scale.set(0.6, 0.75, 1); BUG.shadow.material.opacity = 1;
+    // a hand wiping across: the spider becomes ink right there (hidden under the hand while it happens)
+    let cf = 0; if (T.rmPrev && lk.rinit && !lk.lost) { for (const v of T.rmPrev) cf += v; cf /= T.rmPrev.length * 255; } BUG.cov = cf;
+    // a real wipe: a good part covered for a few frames in a row while your skin itself is not jumping around
+    { const cc2 = FLOW.ap(Hs, F.c[0], F.c[1]), mv = BUG.prevC ? Math.hypot(cc2[0] - BUG.prevC[0], cc2[1] - BUG.prevC[1]) / (Ls * Math.abs(P.t[2] > 0 ? 1 : 1) || 1) : 0; BUG.prevC = cc2;
+      BUG.wipe = cf > 0.14 && mv < 0.15 ? (BUG.wipe || 0) + 1 : 0; }
+    if (BUG.phase === 'walk' && BUG.wipe >= 2 && BUG.t > 1.5) BUG.toInk();
+    if (BUG.phase === 'ink') { BUG.fade = Math.min(1, BUG.fade + dt / 0.12); BUG.inkOp = Math.min(1, BUG.inkOp + dt / 0.35); } else { BUG.fade = Math.max(0, BUG.fade - dt / 0.3); BUG.inkOp = Math.max(0, BUG.inkOp - dt / 0.3); }
+    for (const c of B.g.children) if (c !== BUG.shadow) c.visible = BUG.fade < 1; B.g.visible = true; BUG.shadow.visible = BUG.fade < 1;
+    if (BUG.fade > 0 && BUG.fade < 1) for (const c of B.g.children) if (c.material && c.material.opacity !== undefined && c !== BUG.shadow) { c.material.transparent = true; c.material.opacity = 1 - BUG.fade; }
+    if (BUG.fade === 0) for (const c of B.g.children) if (c.material && c !== BUG.shadow && c.material.transparent) { c.material.transparent = false; c.material.opacity = 1; }
+    if (BUG.U) { const U = BUG.U; U.uRM.value = GL.rtex; U.uUseR.value = GL.ink.material.uniforms.useR.value; U.uPI.value.copy(BUG.root.matrix).invert(); U.uTL.value.set(F.tl[0], F.tl[1]); U.uAX.value.set(uxn[0] / F.W, uxn[1] / F.W); U.uAY.value.set(uyn[0] / F.H, uyn[1] / F.H); }
+    // the ink picture sits where the spider was when it turned
+    const q = BUG.inkQ; q.visible = BUG.inkOp > 0 && !!BUG.inkM; if (q.visible) { const Sz = 1.08, pa = q.geometry.attributes.position, ta = q.geometry.attributes.tuv, IM = BUG.inkM;
+      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([a, b], i) => { const lx = a * Sz / 2, ly = b * Sz / 2, px = IM.c[0] + (lx * IM.bx[0] + ly * IM.by[0]) * IM.L, py = IM.c[1] + (lx * IM.bx[1] + ly * IM.by[1]) * IM.L; pa.setXYZ(i, px, py, 0);
+        const rx = px - F.tl[0], ry = py - F.tl[1]; ta.setXY(i, (rx * uxn[0] + ry * uxn[1]) / F.W, (rx * uyn[0] + ry * uyn[1]) / F.H); }); pa.needsUpdate = true; ta.needsUpdate = true;
+      const u = q.material.uniforms; u.op.value = BUG.inkOp * T.opacity; u.healed.value = T.healed ? 1 : 0; u.rmask.value = GL.rtex; u.useR.value = GL.ink.material.uniforms.useR.value; } },
+  // turn the spider into a tattoo: draw it from straight above into a picture, then lay that picture on the skin in its place
+  toInk() { if (!BUG.ready || !BUG.bodyM) return; const B = BUG.body, r = GL.r, Sz = 1.08; BUG.phase = 'ink'; BUG.fade = 0; if (BUG.btn) BUG.btn.textContent = 'Bring the spider back';
+    const keep = B.g.matrix.clone(), vis = BUG.shadow.visible, ur = BUG.U ? BUG.U.uUseR.value : 0; if (BUG.U) BUG.U.uUseR.value = 0; B.g.matrix.identity(); B.g.matrixWorldNeedsUpdate = true; BUG.shadow.visible = false; BUG.inkQ.visible = false;
+    const rootM = BUG.root.matrix.clone(); BUG.root.matrix.makeScale(1, -1, 1); BUG.root.matrixWorldNeedsUpdate = true;
+    // straight-down view of the spider, drawn twice (on white, then on black) to get its picture with see-through background
+    const oc = BUG.ocam, Pm = new THREE.Matrix4().makeOrthographic(-Sz / 2, Sz / 2, Sz / 2, -Sz / 2, 1, 100); oc.projectionMatrix.copy(Pm); oc.projectionMatrixInverse.copy(Pm).invert(); oc.matrix.makeTranslation(0, 0, 50); oc.matrixWorld.copy(oc.matrix); oc.matrixWorldInverse.copy(oc.matrix).invert();
+    const sunP = BUG.sun.position.clone(), hi = BUG.hemi.intensity, si = BUG.sun.intensity; BUG.sun.position.set(-0.3, 0.4, 1); BUG.hemi.intensity = 1.25; BUG.sun.intensity = 1.6;
+    for (const c of B.g.children) if (c.material && c !== BUG.shadow) { c.material.transparent = false; c.material.opacity = 1; c.visible = true; }
+    const cc = new THREE.Color(); r.getClearColor(cc); const ca = r.getClearAlpha(), cvs = r.domElement, pr = r.getPixelRatio(), N = Math.floor(Math.min(cvs.width, cvs.height) / pr), Np = Math.floor(N * pr), shots = [];
+    for (const bg of [0xffffff, 0x000000]) { r.setViewport(0, 0, N, N); r.setScissor(0, 0, N, N); r.setScissorTest(true); r.setClearColor(bg, 1); r.autoClear = false; r.clear(); r.render(BUG.scene, oc);
+      const c2 = cv(512); c2.getContext('2d').drawImage(cvs, 0, cvs.height - Np, Np, Np, 0, 0, 512, 512); shots.push(c2.getContext('2d').getImageData(0, 0, 512, 512).data); }
+    r.setScissorTest(false); r.setViewport(0, 0, cvs.width / pr, cvs.height / pr); r.autoClear = true; r.setClearColor(cc, ca);
+    { const x = BUG.inkCv.getContext('2d'), out = x.createImageData(512, 512), o = out.data, [wd, bk] = shots; for (let i = 0; i < o.length; i += 4) { const al = Math.max(0, Math.min(1, 1 - ((wd[i] - bk[i]) + (wd[i + 1] - bk[i + 1]) + (wd[i + 2] - bk[i + 2])) / 765));
+        o[i + 3] = al * 255; for (let k = 0; k < 3; k++) o[i + k] = al > 0.01 ? Math.min(255, bk[i + k] / al) : 255; }
+      // black-and-grey tattoo shading: stretch the spider's light and dark, keep highlights as bare skin, and line the outline
+      const Lm = [], A = new Float32Array(512 * 512), D = new Float32Array(512 * 512); for (let i = 0, j = 0; i < o.length; i += 4, j++) { A[j] = o[i + 3] / 255; if (A[j] > 0.5) Lm.push(0.299 * o[i] + 0.587 * o[i + 1] + 0.114 * o[i + 2]); }
+      Lm.sort((a, b) => a - b); const lo = Lm[(Lm.length * 0.05) | 0] || 0, hi2 = Lm[(Lm.length * 0.97) | 0] || 255;
+      for (let i = 0, j = 0; i < o.length; i += 4, j++) { const l = (0.299 * o[i] + 0.587 * o[i + 1] + 0.114 * o[i + 2] - lo) / Math.max(8, hi2 - lo), n = Math.max(0, Math.min(1, l)); D[j] = A[j] * (0.32 + 0.68 * Math.pow(1 - n, 1.1)); }
+      for (let y = 2; y < 510; y++) for (let x2 = 2; x2 < 510; x2++) { const j = y * 512 + x2; if (A[j] < 0.5) continue; let edge = false; for (const d2 of [-2, 2, -1024, 1024]) if (A[j + d2] < 0.15) edge = true; if (edge) D[j] = Math.max(D[j], 0.92); }
+      for (let i = 0, j = 0; i < o.length; i += 4, j++) { o[i] = o[i + 1] = o[i + 2] = 0; o[i + 3] = D[j] * 255; }
+      x.putImageData(out, 0, 0); BUG.inkTex.needsUpdate = true; }
+    BUG.sun.position.copy(sunP); BUG.hemi.intensity = hi; BUG.sun.intensity = si; BUG.root.matrix.copy(rootM); B.g.matrix.copy(keep); BUG.shadow.visible = vis; if (BUG.U) BUG.U.uUseR.value = ur;
+    const e = keep.elements; BUG.inkM = { c: [e[12], e[13]], bx: [e[0] / e[10], e[1] / e[10]], by: [e[4] / e[10], e[5] / e[10]], L: e[10] }; },
+  toggle() { if (BUG.phase === 'walk') BUG.toInk(); else { BUG.reset(); BUG.t = 0; } },
+  render() { if (!BUG.on || !BUG.ready || !BUG.root.visible) return; const r = GL.r; r.autoClear = false; r.clearDepth(); r.render(BUG.scene, BUG.cam); r.autoClear = true; }
+};
+
 /* video pixels → screen (cover for the live camera, contain for a photo), mirrored for the selfie camera */
 function mapper(VW, VH) { const SW = GL.w, SH = GL.h, k = T.still ? Math.min(SW / VW, SH / VH) : Math.max(SW / VW, SH / VH), ox = (SW - VW * k) / 2, oy = (SH - VH * k) / 2;
   return { k, to: (x, y) => { let sx = ox + x * k; if (T.mirror) sx = SW - sx; return [sx / SW * 2 - 1, -((oy + y * k) / SH * 2 - 1)]; },
@@ -13390,7 +13537,7 @@ const T = {
       el('div', { class: 'tt-tog' }, el('button', { class: 'on', onclick: e => { T.healed = false; e.currentTarget.classList.add('on'); e.currentTarget.nextSibling.classList.remove('on'); } }, 'Fresh'), el('button', { onclick: e => { T.healed = true; e.currentTarget.classList.add('on'); e.currentTarget.previousSibling.classList.remove('on'); } }, 'Healed')));
     const shot = el('button', { class: 'tt-shot', 'aria-label': 'Take a photo', onclick: T.capture });
     const panel = el('div', { class: 'tt-panel' }), hide = el('button', { class: 'tt-hide', 'aria-label': 'Hide or show tools', onclick: () => { panel.classList.toggle('mini'); hide.textContent = panel.classList.contains('mini') ? 'Show tools' : 'Hide tools'; } }, 'Hide tools');
-    panel.append(hide, spots, designs, opts); L.append(top, T.status, panel, shot);
+    panel.append(hide, spots, designs, opts); T.bugBtn = BUG.btn = el('button', { class: 'tt-bug', onclick: () => BUG.toggle() }, 'Turn into tattoo'); T.bugBtn.style.display = BUG.on ? '' : 'none'; L.append(top, T.status, panel, shot, T.bugBtn);
     T.fillDesigns(); T.setDesign(T.design || DESIGNS.mandala[1](), T.dkey || 'mandala');
     T.wire(); T.run();
     try { await T.startCam(); } catch (e) { T.say('No camera here. Tap the picture button to try it on a photo.'); }
@@ -13409,8 +13556,11 @@ const T = {
   detectStill() { try { T.detect(T.still, 0, true); } catch (e) {} T.say(T.raw ? 'Placed. Drag, pinch or twist to adjust.' : 'Could not find it in this photo. Drag the tattoo into place.', !!T.raw); },
   fillDesigns() { const D2 = T.designs; D2.textContent = '';
     D2.append(el('button', { class: 'tt-add', onclick: T.upload }, svg('M12 5v14M5 12h14'), el('span', null, 'My design')), el('button', { class: 'tt-add', onclick: T.text }, el('i', null, 'Aa'), el('span', null, 'Name or text')));
+    { const ic = BUG.icon || (BUG.icon = ink((x, S) => { const c = S / 2; x.lineWidth = S / 40; for (const s of [-1, 1]) for (let k = 0; k < 4; k++) { const a = [0.55, 1.15, 1.85, 2.45][k], kx = c + s * Math.sin(a) * S * 0.2, ky = c - Math.cos(a) * S * 0.2 - S * 0.06, fx = c + s * Math.sin(a) * S * 0.42, fy = c - Math.cos(a) * S * 0.42;
+        x.beginPath(); x.moveTo(c, c - S * 0.03); x.quadraticCurveTo(kx, ky - S * 0.08, fx, fy); x.stroke(); } x.beginPath(); x.ellipse(c, c - S * 0.03, S * 0.07, S * 0.085, 0, 0, TAU); x.fill(); x.beginPath(); x.ellipse(c, c + S * 0.14, S * 0.1, S * 0.13, 0, 0, TAU); x.fill(); }));
+      const b = el('button', { class: 'tt-d' + (T.dkey === 'spider' ? ' on' : ''), onclick: () => { BUG.on = true; BUG.reset(); T.setDesign(BUG.blank || (BUG.blank = cv(400)), 'spider'); T.fillDesigns(); } }); const im = new Image(); im.src = ic.toDataURL(); b.append(im, el('span', null, 'Real spider (3D)')); D2.append(b); }
     for (const [k, [n, f]] of Object.entries(DESIGNS)) { const c = T['dz_' + k] || (T['dz_' + k] = f()); const b = el('button', { class: 'tt-d' + (T.dkey === k ? ' on' : ''), onclick: () => { T.setDesign(c, k); T.fillDesigns(); } }); const im = new Image(); im.src = c.toDataURL(); b.append(im, el('span', null, n)); D2.append(b); } },
-  setDesign(c, key) { const keep = T.lock && !SPOTS[T.spot].need; T.dropLock(); T.design = c; T.dkey = key; if (!keep) T.off = { u: 0, v: 0 }; if (GL.ink) GL.setDesign(c); },
+  setDesign(c, key) { if (key !== 'spider') BUG.on = false; if (T.bugBtn) T.bugBtn.style.display = key === 'spider' ? '' : 'none'; const keep = T.lock && !SPOTS[T.spot].need; T.dropLock(); T.design = c; T.dkey = key; if (!keep) T.off = { u: 0, v: 0 }; if (GL.ink) GL.setDesign(c); },
   async upload() { const img = await pickPhoto(); if (!img) return; T.setDesign(toInk(img, T.colour), 'mine'); T.fillDesigns(); toast('White paper becomes see-through. Pinch to resize, twist to turn.', 3500); },
   async text() { const inp = el('input', { value: 'Forever', maxlength: 24, style: 'width:100%;margin-bottom:10px' }); let font = FONTS[0][1];
     const fonts = el('div', { class: 'rm-chips' }, ...FONTS.map(([n, f], i) => el('button', { class: i ? '' : 'on', style: `font-family:${f}`, onclick: e => { font = f; for (const b of fonts.children) b.classList.toggle('on', b === e.currentTarget); } }, n)));
@@ -13450,8 +13600,8 @@ const T = {
       if (!T.still && T.lock && SPOTS[T.spot].need === 'pose') { if (!AI.hand) { if (!T.handLoading) { T.handLoading = true; loadAI('hand', 'VIDEO').catch(() => {}); } } else if (T.fn % 2 === 0) { try { const r = AI.hand.detectForVideo(fc, performance.now()), B = T.raw && T.raw.B, W2 = fc.width, H2 = fc.height;
         T.occHands = (r.landmarks || []).map(h => h.map(q => [q.x * W2, q.y * H2])).filter(h => !(T.spot === 'forearm' && B && Math.hypot(h[0][0] - B[0], h[0][1] - B[1]) < Math.hypot(T.raw.B[0] - T.raw.A[0], T.raw.B[1] - T.raw.A[1]) * 0.35)); } catch (e) {} } }
       T.drawOcc(W, H);
-      T.layout(W, H); GL.r.render(GL.scene, GL.cam);
-      if (!T.still && T.ready) { const sp = SPOTS[T.spot]; if (T.lock) T.say('Locked to your skin. Drag, pinch or twist to adjust.', true); else if (sp.need && !T.raw) T.say(sp.tip); else if ((T.noLock || 0) > 40) T.say('Not enough skin detail here. Draw a small pen mark where the tattoo goes for a solid lock.'); else T.say('Hold still a moment to lock it to your skin'); } };
+      T.layout(W, H); GL.r.render(GL.scene, GL.cam); BUG.render();
+      if (!T.still && T.ready) { const sp = SPOTS[T.spot]; if (T.lock && BUG.on) T.say(BUG.phase === 'walk' ? 'The spider is on your skin. Wipe your hand over it to make it a tattoo.' : 'Done. It is a tattoo now. Tap the button to bring the spider back.', true); else if (T.lock) T.say('Locked to your skin. Drag, pinch or twist to adjust.', true); else if (BUG.on && !T.still) T.say('Hold your arm or hand still a moment so the spider can land on it.'); else if (sp.need && !T.raw) T.say(sp.tip); else if ((T.noLock || 0) > 40) T.say('Not enough skin detail here. Draw a small pen mark where the tattoo goes for a solid lock.'); else T.say('Hold still a moment to lock it to your skin'); } };
     next(); },
   /* where every point of the tattoo lands on screen */
   layout(W, H) { const M = mapper(W, H), bp = GL.bg.geometry.attributes.position, c4 = [[0, 0], [W, 0], [0, H], [W, H]];
@@ -13502,11 +13652,12 @@ const T = {
         const f = Math.cos(th); return [A[0] + ux * al + nx * Rr * Math.sin(th), A[1] + uy * al + ny * Rr * Math.sin(th), f > 0 ? Math.pow(f, 0.6) : 0]; }; }
     // the model's placement (or none), then the skin lock takes over and keeps it stuck to the skin pixels
     const N = (C + 1) * (R2 + 1); let G = null, Fa = null; if (put && put !== 'none') { G = new Float32Array(N * 2); Fa = new Float32Array(N); for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i, q = put(i / C, j / R2); G[k * 2] = q[0]; G[k * 2 + 1] = q[1]; Fa[k] = q[2]; } }
-    const out = T.skinStep(G, Fa, W, H); if (!out) { GL.ink.visible = false; T.lastM = M; T.lastWH = [W, H]; return; }
+    const out = T.skinStep(G, Fa, W, H); if (!out) { GL.ink.visible = false; if (BUG.ready) BUG.root.visible = false; T.lastM = M; T.lastWH = [W, H]; return; }
     for (let k = 0; k < N; k++) { const s2 = M.to(out.G[k * 2], out.G[k * 2 + 1]); P.setXYZ(k, s2[0], s2[1], 0); Fd.setX(k, out.F[k]); }
     const lk = T.lock, um2 = GL.ink.material.uniforms; um2.occ.value = lk && !lk.lost && T.roto !== false && lk.keyW ? 1 : 0;
     { const CK = g.attributes.ck, s = lk ? lk.s : 1; for (let k = 0; k < N; k++) CK.setXYZW(k, out.G[k * 2] / W, 1 - out.G[k * 2 + 1] / H, lk ? lk.G0[k * 2] / s / W : 0, lk ? 1 - lk.G0[k * 2 + 1] / s / H : 0); CK.needsUpdate = true; um2.gain.value = lk && lk.gain || 1; um2.px.value.set(1.5 / W, 1.5 / H); }
-    P.needsUpdate = true; Fd.needsUpdate = true; GL.ink.visible = true; T.lastM = M; T.lastWH = [W, H]; },
+    P.needsUpdate = true; Fd.needsUpdate = true; GL.ink.visible = true; T.lastM = M; T.lastWH = [W, H];
+    if (BUG.on) { GL.ink.visible = false; if (T.lock && !T.still) BUG.update(T.lock, W, H, M); else if (BUG.ready) BUG.root.visible = false; } },
   /* skin lock: lock once the tattoo is placed and steady, follow the skin, fall back to the body model if the skin is lost */
   skinStep(G, Fa, W, H) { if (T.still || !FLOW.cur) { if (G) T.last = { G, F: Fa }; return G ? { G, F: Fa } : null; }
     const s = FLOW.cur.s, lk = T.lock, t = performance.now() / 1000;
@@ -13528,13 +13679,13 @@ const T = {
         if (ok && lb < 30) { const m = ids[4], a0 = FLOW.ap(Hb, lk.G0[m * 2], lk.G0[m * 2 + 1]), a1 = FLOW.ap(lk.H, lk.G0[m * 2], lk.G0[m * 2 + 1]), size = Math.hypot(lk.G0[0] - lk.G0[(N - 1) * 2], lk.G0[1] - lk.G0[(N - 1) * 2 + 1]), bm = Hm ? FLOW.ap(Hm, lk.G0[m * 2], lk.G0[m * 2 + 1]) : null;
           if (Math.hypot(a1[0] - a0[0], a1[1] - a0[1]) > size * 0.35 && !(bm && Math.hypot(a1[0] - bm[0], a1[1] - bm[1]) < size * 0.35) && !(Hp && (q => Math.hypot(a1[0] - q[0], a1[1] - q[1]) < size * 0.35)(FLOW.ap(Hp, lk.G0[m * 2], lk.G0[m * 2 + 1])))) { ok = false; lk.H = Hb; lk.p = pb; lk.a = ab; lk.lost = lb; } } }
       if (ok && Hm && FLOW.sane(lk, Hm)) { const Hi = FLOW.inv(Hm); if (Hi) lk.corr = FLOW.mul(lk.H, Hi); }
-      if (ok) { T.last = { G: warp(FLOW.smooth(lk, t)), F: lk.F }; if (T.roto !== false) { try { T.rotoMask(lk); } catch (e) { GL.ink.material.uniforms.useR.value = 0; } } return T.last; }
+      if (ok) { T.last = { G: warp(lk.Hs = FLOW.smooth(lk, t)), F: lk.F }; if (T.roto !== false) { try { T.rotoMask(lk); } catch (e) { GL.ink.material.uniforms.useR.value = 0; } } return T.last; }
       if (T.roto !== false && lk.lost <= 3) { try { T.rotoMask(lk); } catch (e) {} }
       // lost for a while usually means something covers the spot: keep the cut-out growing
       if (T.rmPrev && lk.lost > 3 && !Hp) { const d = GL.rtex.image.data; for (let i = 0; i < d.length; i += 4) d[i] = Math.min(255, d[i] + 40); GL.rtex.needsUpdate = true; }
       // lost for now: follow the body model (or hold still) while trying to find the same skin again
       // skin not found this frame: move with your hand straight away (body model), never stand still in the air
-      if (Hp) { lk.H = Hp; lk.p = lk.a.map(q => FLOW.ap(Hp, q[0], q[1])); T.last = { G: warp(FLOW.smooth(lk, t)), F: lk.F }; if (lk.lost > 3 && GL.ink) { const d = GL.rtex.image.data; for (let i = 0; i < d.length; i += 4) d[i] = Math.max(0, d[i] - 60); GL.rtex.needsUpdate = true; } }
+      if (Hp) { lk.H = Hp; lk.p = lk.a.map(q => FLOW.ap(Hp, q[0], q[1])); T.last = { G: warp(lk.Hs = FLOW.smooth(lk, t)), F: lk.F }; if (lk.lost > 3 && GL.ink) { const d = GL.rtex.image.data; for (let i = 0; i < d.length; i += 4) d[i] = Math.max(0, d[i] - 60); GL.rtex.needsUpdate = true; } }
       if (lk.lost > (Hm ? 90 : 120)) { T.dropLock(); } else { if (!Hp && Hm && lk.lost > 3 && FLOW.sane(lk, Hm)) T.last = { G: warp(Hm), F: lk.F }; return T.last; } }
     const base = G ? { G, F: Fa } : (T.last && !SPOTS[T.spot].need ? T.last : null); if (!base) { T.steady = 0; return null; }
     if (!T.drag && ++T.steady > 5) { const g2 = new Float32Array(base.G.length); for (let k = 0; k < g2.length; k++) g2[k] = base.G[k] * s; const L2 = FLOW.start(g2);
@@ -13631,6 +13782,7 @@ document.head.append(el('style', null, `
 .tt-opts{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}.tt-opts label{display:flex;align-items:center;gap:8px;font-size:.72rem;color:var(--muted)}.tt-opts label span{width:34px}.tt-opts input{flex:1;accent-color:#c9a45f;min-width:0}
 .tt-tog{display:flex;padding:3px;border-radius:99px;background:rgba(255,246,230,.07);border:1px solid var(--line)}.tt-tog button{flex:1;padding:5px 0;border-radius:99px;font-size:.74rem;color:var(--muted)}.tt-tog button.on{background:#f6f0e6;color:#111;font-weight:700}
 .tt-hide{justify-self:center;background:rgba(255,255,255,.12);color:#f3ead8;border:0;border-radius:99px;padding:5px 14px;font-size:12px}.tt-panel.mini{background:linear-gradient(0deg,rgba(10,9,8,.7) 60%,transparent)}.tt-panel.mini .tt-designs,.tt-panel.mini .tt-opts{display:none}
+.tt-bug{position:absolute;right:16px;bottom:calc(30px + var(--safe-b));z-index:4;background:rgba(20,17,14,.78);color:#f3ead8;border:1px solid rgba(201,164,95,.7);border-radius:99px;padding:10px 14px;font-size:13px}
 .tt-shot{position:absolute;left:50%;bottom:calc(18px + var(--safe-b));transform:translateX(-50%);z-index:4;width:68px;height:68px;border-radius:50%;background:#fff;border:5px solid rgba(201,164,95,.9);box-shadow:0 0 0 4px rgba(0,0,0,.35)}
 .tt.flash:after{content:"";position:absolute;inset:0;background:#fff;opacity:.7;z-index:9;pointer-events:none}
 `));
