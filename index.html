@@ -13439,6 +13439,16 @@ const BUG = {
   update(lk, W, H, M) { if (!BUG.ready) BUG.init(); const now = performance.now() / 1000, dt = Math.min(0.1, BUG.last ? now - BUG.last : 0.016); BUG.last = now;
     const Hs = lk && (lk.Hs || lk.H); BUG.root.visible = !!Hs; if (!Hs) return; const Q = FLOW.cur, s = Q.s, P = BUG.pose(Hs, Q.w, Q.h), F = BUG.frame(lk), Ls = Math.min(F.W, F.H) * 0.95;
     // plane (lock-frame px, height towards the camera) → camera space (three.js axes)
+    // 3D turn of the patch from how the skin around its centre is stretched (stable), not from the homography's perspective terms (noisy)
+    { const c0 = FLOW.ap(Hs, F.c[0], F.c[1]), e = 4, jx = FLOW.ap(Hs, F.c[0] + e, F.c[1]), jy = FLOW.ap(Hs, F.c[0], F.c[1] + e), u = [(jx[0] - c0[0]) / e, (jx[1] - c0[1]) / e], v = [(jy[0] - c0[0]) / e, (jy[1] - c0[1]) / e];
+      const a2 = u[0] * u[0] + u[1] * u[1], b2 = v[0] * v[0] + v[1] * v[1], ab = u[0] * v[0] + u[1] * v[1], tr = a2 + b2, dt2 = a2 * b2 - ab * ab, sMax = Math.sqrt((tr + Math.sqrt(Math.max(0, tr * tr - 4 * dt2))) / 2) || 1;
+      const lim = x => Math.max(0, Math.min(0.22, x)); let z1 = 0.7 * Math.sqrt(lim(1 - a2 / (sMax * sMax))), z2 = 0.7 * Math.sqrt(lim(1 - b2 / (sMax * sMax)));   // a gentle, capped tilt: a wrong steep tilt looks far worse than a slightly flat one if (-ab / (sMax * sMax) < 0) z2 = -z2;
+      const mk = sg => { const r1 = [u[0] / sMax, u[1] / sMax, sg * z1], r2 = [v[0] / sMax, v[1] / sMax, sg * z2]; return [r1, r2]; }, A1 = mk(1), A2 = mk(-1), ref = BUG.R1 && BUG.lkRef === lk ? BUG.R1 : P.r1;
+      let [r1, r2] = (A1[0][2] - ref[2]) ** 2 + (A1[1][2] - (BUG.R2 && BUG.lkRef === lk ? BUG.R2 : P.r2)[2]) ** 2 <= (A2[0][2] - ref[2]) ** 2 + (A2[1][2] - (BUG.R2 && BUG.lkRef === lk ? BUG.R2 : P.r2)[2]) ** 2 ? A1 : A2;
+      if (BUG.R1 && BUG.lkRef === lk) { const k = 0.35; r1 = BUG.R1.map((q, i) => q + (r1[i] - q) * k); r2 = BUG.R2.map((q, i) => q + (r2[i] - q) * k); }
+      let n = Math.hypot(...r1); r1 = r1.map(q => q / n); const d = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2]; r2 = r2.map((q, i) => q - d * r1[i]); n = Math.hypot(...r2); r2 = r2.map(q => q / n);
+      BUG.R1 = r1; BUG.R2 = r2; BUG.lkRef = lk; const Z = P.f / sMax, Pc = [(c0[0] - P.cx) * Z / P.f, (c0[1] - P.cy) * Z / P.f, Z];
+      P.r1 = r1; P.r2 = r2; P.r3 = [r1[1] * r2[2] - r1[2] * r2[1], r1[2] * r2[0] - r1[0] * r2[2], r1[0] * r2[1] - r1[1] * r2[0]]; P.t = [0, 1, 2].map(i => Pc[i] - r1[i] * F.c[0] - r2[i] * F.c[1]); }
     const m = new THREE.Matrix4(); m.set(P.r1[0], P.r2[0], -P.r3[0], P.t[0], -P.r1[1], -P.r2[1], P.r3[1], -P.t[1], -P.r1[2], -P.r2[2], P.r3[2], -P.t[2], 0, 0, 0, 1); BUG.root.matrix.copy(m); BUG.root.matrixWorldNeedsUpdate = true;
     // camera: lens in FLOW pixels → video pixels → screen
     const o = M.to(0, 0), ox1 = M.to(1, 0)[0] - o[0], oy1 = M.to(0, 1)[1] - o[1], ax = ox1 * P.f / s, ay = oy1 * P.f / s, bx = o[0] + ox1 * P.cx / s, by = o[1] + oy1 * P.cy / s, n = 5, fa = 1e6;
@@ -13446,10 +13456,10 @@ const BUG = {
     // light follows how bright your skin is right now
     { let sum = 0, cnt = 0; const L2 = Q.L[2], cc = FLOW.ap(Hs, F.c[0], F.c[1]); for (let j = -6; j <= 6; j += 2) for (let i = -6; i <= 6; i += 2) { sum += FLOW.bil(L2, cc[0] / 4 + i, cc[1] / 4 + j); cnt++; } const e = Math.min(1.6, Math.max(0.35, sum / cnt / 150)); BUG.hemi.intensity = 1.0 * e; BUG.sun.intensity = 1.5 * e; }
     const B = BUG.body, uxn = [F.ux[0] / F.W, F.ux[1] / F.W], uyn = [F.uy[0] / F.H, F.uy[1] / F.H];
-    if (!BUG.pos) { BUG.pos = [-0.35, 0.3]; BUG.head = -0.9; }
+    if (!BUG.pos) { BUG.pos = [-0.12, 0.1]; BUG.head = -0.6; }
     // wander in little bursts, like a real spider, inside the tattoo area
     if (BUG.phase === 'walk') { BUG.t += dt; if (BUG.pause > 0) { BUG.pause -= dt; BUG.speed = Math.max(0, BUG.speed - dt * 2); } else {
-        if (!BUG.target) BUG.target = [(Math.random() - 0.5) * 0.45, (Math.random() - 0.5) * 0.45];
+        if (!BUG.target) BUG.target = [(Math.random() - 0.5) * 0.24, (Math.random() - 0.5) * 0.24];
         const dx = BUG.target[0] - BUG.pos[0], dy = BUG.target[1] - BUG.pos[1], dist = Math.hypot(dx, dy), want = Math.atan2(dx, -dy); let dh = want - BUG.head; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
         BUG.head += Math.max(-dt * 3, Math.min(dt * 3, dh)); BUG.speed = Math.min(0.45, BUG.speed + dt * 2.5) * (Math.abs(dh) > 1 ? 0.4 : 1);
         BUG.pos[0] += Math.sin(BUG.head) * BUG.speed * dt; BUG.pos[1] -= Math.cos(BUG.head) * BUG.speed * dt;
@@ -13476,7 +13486,7 @@ const BUG = {
     let cf = 0; if (T.rmPrev && lk.rinit && !lk.lost) { for (const v of T.rmPrev) cf += v; cf /= T.rmPrev.length * 255; } BUG.cov = cf;
     // a real wipe: a good part covered for a few frames in a row while your skin itself is not jumping around
     { const cc2 = FLOW.ap(Hs, F.c[0], F.c[1]), mv = BUG.prevC ? Math.hypot(cc2[0] - BUG.prevC[0], cc2[1] - BUG.prevC[1]) / (Ls * Math.abs(P.t[2] > 0 ? 1 : 1) || 1) : 0; BUG.prevC = cc2;
-      BUG.wipe = cf > 0.14 && mv < 0.15 ? (BUG.wipe || 0) + 1 : 0; }
+      BUG.wipe = lk.handNear && cf > 0.1 && mv < 0.2 ? (BUG.wipe || 0) + 1 : 0; }
     if (BUG.phase === 'walk' && BUG.wipe >= 2 && BUG.t > 1.5) BUG.toInk();
     if (BUG.phase === 'ink') { BUG.fade = Math.min(1, BUG.fade + dt / 0.12); BUG.inkOp = Math.min(1, BUG.inkOp + dt / 0.35); } else { BUG.fade = Math.max(0, BUG.fade - dt / 0.3); BUG.inkOp = Math.max(0, BUG.inkOp - dt / 0.3); }
     for (const c of B.g.children) if (c !== BUG.shadow) c.visible = BUG.fade < 1; B.g.visible = true; BUG.shadow.visible = BUG.fade < 1;
@@ -13654,7 +13664,7 @@ const T = {
     const N = (C + 1) * (R2 + 1); let G = null, Fa = null; if (put && put !== 'none') { G = new Float32Array(N * 2); Fa = new Float32Array(N); for (let j = 0; j <= R2; j++) for (let i = 0; i <= C; i++) { const k = j * (C + 1) + i, q = put(i / C, j / R2); G[k * 2] = q[0]; G[k * 2 + 1] = q[1]; Fa[k] = q[2]; } }
     const out = T.skinStep(G, Fa, W, H); if (!out) { GL.ink.visible = false; if (BUG.ready) BUG.root.visible = false; T.lastM = M; T.lastWH = [W, H]; return; }
     for (let k = 0; k < N; k++) { const s2 = M.to(out.G[k * 2], out.G[k * 2 + 1]); P.setXYZ(k, s2[0], s2[1], 0); Fd.setX(k, out.F[k]); }
-    const lk = T.lock, um2 = GL.ink.material.uniforms; um2.occ.value = lk && !lk.lost && T.roto !== false && lk.keyW ? 1 : 0;
+    const lk = T.lock, um2 = GL.ink.material.uniforms; um2.occ.value = lk && !lk.lost && T.roto !== false && lk.keyW && lk.handNear ? 1 : 0;
     { const CK = g.attributes.ck, s = lk ? lk.s : 1; for (let k = 0; k < N; k++) CK.setXYZW(k, out.G[k * 2] / W, 1 - out.G[k * 2 + 1] / H, lk ? lk.G0[k * 2] / s / W : 0, lk ? 1 - lk.G0[k * 2 + 1] / s / H : 0); CK.needsUpdate = true; um2.gain.value = lk && lk.gain || 1; um2.px.value.set(1.5 / W, 1.5 / H); }
     P.needsUpdate = true; Fd.needsUpdate = true; GL.ink.visible = true; T.lastM = M; T.lastWH = [W, H];
     if (BUG.on) { GL.ink.visible = false; if (T.lock && !T.still) BUG.update(T.lock, W, H, M); else if (BUG.ready) BUG.root.visible = false; } },
@@ -13666,7 +13676,7 @@ const T = {
       const Hm = G ? FLOW.fitH(ids.map(i => [lk.G0[i * 2], lk.G0[i * 2 + 1]]), ids.map(i => [G[i * 2] * s, G[i * 2 + 1] * s])) : null;
       let cf0 = 0; if (T.rmPrev && lk.rinit) { for (const v of T.rmPrev) cf0 += v; cf0 /= T.rmPrev.length * 255; }
       // only skip skin under the cut-out while it is partly covered or a hand is seen in front; a fully 'covered' look with no hand seen is more likely light or a turn of the hand
-      const rej0 = T.occRej(s), rej1 = (cf0 < 0.6 || (T.occHands && T.occHands.length)) ? T.rotoRej(lk) : null, rej = rej0 && rej1 ? (x, y) => rej0(x, y) || rej1(x, y) : rej0 || rej1;
+      const rej0 = T.occRej(s), rej1 = lk.handNear ? T.rotoRej(lk) : null, rej = rej0 && rej1 ? (x, y) => rej0(x, y) || rej1(x, y) : rej0 || rej1;
       // where the body model puts the tattoo now, corrected by how far the skin lock differed from it a moment ago (so switching between them never jumps)
       const Hp = Hm && lk.corr && FLOW.sane(lk, Hm) ? FLOW.mul(lk.corr, Hm) : null;
       // most of the spot is covered: what is left to see is mostly the thing in front, so hold the tattoo where your skin was and wait
@@ -13679,6 +13689,9 @@ const T = {
         if (ok && lb < 30) { const m = ids[4], a0 = FLOW.ap(Hb, lk.G0[m * 2], lk.G0[m * 2 + 1]), a1 = FLOW.ap(lk.H, lk.G0[m * 2], lk.G0[m * 2 + 1]), size = Math.hypot(lk.G0[0] - lk.G0[(N - 1) * 2], lk.G0[1] - lk.G0[(N - 1) * 2 + 1]), bm = Hm ? FLOW.ap(Hm, lk.G0[m * 2], lk.G0[m * 2 + 1]) : null;
           if (Math.hypot(a1[0] - a0[0], a1[1] - a0[1]) > size * 0.35 && !(bm && Math.hypot(a1[0] - bm[0], a1[1] - bm[1]) < size * 0.35) && !(Hp && (q => Math.hypot(a1[0] - q[0], a1[1] - q[1]) < size * 0.35)(FLOW.ap(Hp, lk.G0[m * 2], lk.G0[m * 2 + 1])))) { ok = false; lk.H = Hb; lk.p = pb; lk.a = ab; lk.lost = lb; } } }
       if (ok && Hm && FLOW.sane(lk, Hm)) { const Hi = FLOW.inv(Hm); if (Hi) lk.corr = FLOW.mul(lk.H, Hi); }
+      // is another hand (seen by the hand model) over or next to the tattoo right now?
+      { lk.handNear = false; const hs = T.occHands; if (hs && hs.length) { const N2 = lk.G0.length / 2, cK = [lk.G0[(N2 >> 1) * 2], lk.G0[(N2 >> 1) * 2 + 1]], c2 = FLOW.ap(lk.H, cK[0], cK[1]), rr = Math.hypot(lk.G0[0] - lk.G0[(N2 - 1) * 2], lk.G0[1] - lk.G0[(N2 - 1) * 2 + 1]) * 0.9;
+        for (const h of hs) for (const q of h) if (Math.hypot(q[0] * s - c2[0], q[1] * s - c2[1]) < rr) { lk.handNear = true; break; } } }
       if (ok) { T.last = { G: warp(lk.Hs = FLOW.smooth(lk, t)), F: lk.F }; if (T.roto !== false) { try { T.rotoMask(lk); } catch (e) { GL.ink.material.uniforms.useR.value = 0; } } return T.last; }
       if (T.roto !== false && lk.lost <= 3) { try { T.rotoMask(lk); } catch (e) {} }
       // lost for a while usually means something covers the spot: keep the cut-out growing
@@ -13706,24 +13719,33 @@ const T = {
         const P = (a, b, o) => G0[k(a, b) + o]; return [0, 1].map(o => (P(i, j, o) * (1 - fx) + P(i + 1, j, o) * fx) * (1 - fy) + (P(i, j + 1, o) * (1 - fx) + P(i + 1, j + 1, o) * fx) * fy); };
       for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) { const kp = at((x + 0.5) / MW, (y + 0.5) / MH), c = y * MW + x; lk.rpos[c * 2] = kp[0]; lk.rpos[c * 2 + 1] = kp[1]; } }
     if (!lk.rref1) lk.rref1 = new Float32Array(NC * n);
-    const m = new Uint8Array(NC), cA = new Float32Array(n), cB = new Float32Array(n), first = !lk.rinit, Q1 = FLOW.cur.L[1];
+    const m = new Uint8Array(NC), cA = new Float32Array(n), cB = new Float32Array(n), first = !lk.rinit, Q1 = FLOW.cur.L[1], g = lk.rg || 1; let gA = 0, gB = 0;
     for (let c = 0; c < NC; c++) { const kx = lk.rpos[c * 2], ky = lk.rpos[c * 2 + 1], cp = FLOW.ap(Hh, kx, ky), J1 = FLOW.ap(Hh, kx + 1, ky), J2 = FLOW.ap(Hh, kx, ky + 1), ax = J1[0] - cp[0], ay = J1[1] - cp[1], bx = J2[0] - cp[0], by = J2[1] - cp[1];
-     let occM = 0;
+     let occM = 0, occN = 1;
      // two sizes: fine skin pores, and the bigger shapes (veins, knuckles, edges) that another hand of the same colour does not share
      for (let lv = 0; lv < 2; lv++) { const cur = lv ? cB : cA, ref = lv ? lk.rref1 : lk.rref, QL = lv ? Q1 : Q, sc = lv ? 0.5 : 1, X0 = cp[0] * sc, Y0 = cp[1] * sc;
       let k = 0, sb = 0; for (let j = -r; j <= r; j++) for (let i = -r; i <= r; i++, k++) { cur[k] = FLOW.bil(QL, X0 + ax * i + bx * j, Y0 + ay * i + by * j); sb += cur[k]; }
       const o = c * n; if (first) { ref.set(cur, o); continue; }
       let sa = 0; for (k = 0; k < n; k++) sa += ref[o + k]; sa /= n; sb /= n; let va = 0, vb = 0, cv2 = 0; for (k = 0; k < n; k++) { const da = ref[o + k] - sa, db = cur[k] - sb; va += da * da; vb += db * db; cv2 += da * db; } va /= n; vb /= n; cv2 /= n;
-      const dm = Math.abs(sb - sa) / (sa + 10); let occ;
-      if (va < 6 && vb < 6) occ = dm > 0.12 ? 1 : 0;   // both smooth: only a clear brightness change counts
-      else { const ncc = cv2 / Math.sqrt((va + 3) * (vb + 3)); occ = Math.min(1, Math.max(0, (0.6 - ncc) / 0.3)); if (dm > 0.22) occ = 1; }
+      if (!lv) { gA += sa; gB += sb; }
+      // the camera's auto exposure brightens or darkens everything together: compare against that, not against the lock moment
+      const dm = Math.abs(sb - sa * g) / (sa * g + 10); let occ;
+      if (va < 15 && vb < 15 * g * g) occ = dm > 0.16 ? 1 : 0;   // both smooth: only a clear brightness change counts
+      else { const ncc = cv2 / Math.sqrt((va + 12) * (vb + 12)); occ = Math.min(1, Math.max(0, (0.5 - ncc) / 0.3)); if (dm > 0.28) occ = 1; }
       if (lv && occ > 0.5 && va < 12 && vb < 12) occ *= 0.5;   // the bigger view of very plain skin says little
-      occM = Math.max(occM, occ); }
+      occM = Math.max(occM, occ); occN = Math.min(occN, occ); }
      if (first) continue; const rf0 = lk.rref, rf1 = lk.rref1, o = c * n, c0 = cA, c1 = cB;
      if (occM < 0.25) { lk.rhid[c] = 0; for (let k = 0; k < n; k++) { rf0[o + k] = rf0[o + k] * 0.92 + c0[k] * 0.08; rf1[o + k] = rf1[o + k] * 0.92 + c1[k] * 0.08; } }
      else if (++lk.rhid[c] > 150 && (lk.rcf || 0) < 0.15) { rf0.set(c0, o); rf1.set(c1, o); lk.rhid[c] = 0; occM = 0; }   // something has sat still on the skin for seconds: it is part of the skin now (a ring, a plaster)
-     m[c] = occM * 255; }
+     m[c] = lk.handNear ? occM * 255 : 0; }
+    if (gA > 0) lk.rg = Math.max(0.5, Math.min(2, gB / gA));
     if (first) { lk.rinit = 1; return; }
+    // real cameras: noise, auto exposure and small turns make lone patches look 'different'. Only a big connected area is something in front
+    // (smaller pieces are allowed when the hand model actually sees another hand there)
+    { const minA = lk.handNear ? 10 : 45, seen = new Uint8Array(NC), st = []; for (let i = 0; i < NC; i++) { if (seen[i] || m[i] < 128) continue; const comp = []; st.push(i); seen[i] = 1;
+        while (st.length) { const c = st.pop(); comp.push(c); const x = c % MW, y = (c / MW) | 0; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const X = x + dx, Y = y + dy; if (X < 0 || Y < 0 || X >= MW || Y >= MH) continue; const j = Y * MW + X; if (!seen[j] && m[j] >= 128) { seen[j] = 1; st.push(j); } } }
+        if (comp.length < minA) for (const c of comp) m[c] = 0; }
+      for (let i = 0; i < NC; i++) if (m[i] < 128) m[i] = Math.min(m[i], 60); }
     { let t2 = 0; for (let i = 0; i < NC; i++) t2 += m[i] > 127 ? 1 : 0; lk.rcf = t2 / NC; }
     // tidy the mask: lone specks go, holes inside a covered area fill, then soften the edge a little
     const o2 = new Uint8Array(NC); for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) { let s2 = 0, cnt = 0; for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) { const X = x + i, Y = y + j; if (X < 0 || Y < 0 || X >= MW || Y >= MH) continue; s2 += m[Y * MW + X] > 127 ? 1 : 0; cnt++; }
@@ -13787,6 +13809,7 @@ document.head.append(el('style', null, `
 .tt.flash:after{content:"";position:absolute;inset:0;background:#fff;opacity:.7;z-index:9;pointer-events:none}
 `));
 window.PicAliveTattoo = { open: () => T.open(), T, GL, FLOW, DESIGNS, toInk, textInk };
+window.PicAliveBug = BUG;
 })();
 </script>
 <script>(() => {
